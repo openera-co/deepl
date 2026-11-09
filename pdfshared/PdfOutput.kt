@@ -133,7 +133,7 @@ object PdfToModel {
         PDDocument.load(file).use { doc ->
             val t = PdfTranslator(fonts)
             val lines = t.extract(doc)
-            val blocks = Layout.blocks(lines)
+            val blocks = Layout.blocks(lines, rules = t::rulesOf)
             val sizes = blocks.map { it.fontSize }.sorted()
             val body = if (sizes.isEmpty()) 11f else sizes[sizes.size / 2]
             val sections = ArrayList<Section>()

@@ -102,4 +102,17 @@ class TextTest {
         assertEquals("Le point de départ (voir la carte).", Dictation.format("le point de départ ouvrez la parenthèse voir la carte fermez la parenthèse point"))
         assertEquals("Pourquoi ?", Dictation.format("pourquoi point d'interrogation"))
     }
+
+    @Test fun formulasLeadersAndTermsAreProtected() {
+        assertFalse(Segmenter.isLinguistic("\$ ar{x} = rac{1}{N} \\sum_{i=1}^{N} x_i\$"))
+        assertFalse(Segmenter.isLinguistic("\$V(x) = \\frac{1}{N} \\sum (x_i - \\bar{x})^2\$"))
+        assertTrue(Segmenter.isLinguistic("Pour une série ordonnée de \$N\$ valeurs"))
+        val segs = Segmenter.split("Nom : ..........   Prénom : ______")
+        assertEquals(listOf("Nom :", "Prénom :"), segs.filter { it.translatable }.map { it.text.trim() })
+        assertEquals("Exercise 3 : les linear functions", SchoolTerms.apply("Exercice 3 : les fonctions affines"))
+        assertEquals("To remember", SchoolTerms.apply("À retenir"))
+        // A term the model garbles is retried with a placeholder and put back.
+        val garbler = SentenceTranslator { ss, _ -> ss.map { it.replace("past participles", "participating pasts").replace("Accordez les", "Agree the").replace(" dans la phrase", " in the sentence") } }
+        assertEquals("Agree the past participles in the sentence.", TextTranslator(garbler).translate("Accordez les participes passés dans la phrase."))
+    }
 }

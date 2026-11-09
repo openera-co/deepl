@@ -22,6 +22,7 @@ fun main(args: Array<String>) {
         "mt" -> mt(args.drop(1))
         "convert" -> convert(args.drop(1))
         "images" -> images(args.drop(1))
+        "pdf" -> pdf(args.drop(1))
         else -> error("usage: fidelity|mt …")
     }
 }
@@ -41,6 +42,19 @@ private fun mt(a: List<String>) {
     val sec = (System.nanoTime() - t0) / 1e9
     File(a[2]).writeText(out.joinToString("\n") + "\n")
     println("translated ${src.size} lines in ${"%.1f".format(sec)} s → ${"%.1f".format(src.size / sec)} lines/s, ${"%.0f".format(src.sumOf { it.length } / sec)} chars/s")
+}
+
+/** pdf <fake|modelDir> <outDir> <file.pdf>… : translates real PDFs for visual comparison. */
+private fun pdf(a: List<String>) {
+    val engine = engineFor(a[0]); val outDir = File(a[1]).also { it.mkdirs() }
+    val tr = TextTranslator(engine)
+    for (f in a.drop(2).map { File(it) }) {
+        val t0 = System.nanoTime()
+        val out = File(outDir, f.nameWithoutExtension + ".en.pdf")
+        val stats = out.outputStream().use { app.carnet.pdf.PdfTranslator(AssetFonts()).translate(f, it, tr) }
+        println("${f.name}: $stats in ${(System.nanoTime() - t0) / 1_000_000} ms")
+    }
+    if (engine is MarianSentenceTranslator) System.exit(0)
 }
 
 private fun images(a: List<String>) {

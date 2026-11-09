@@ -9,3 +9,4 @@ local.properties
 /captures/
 *.apk
 !/app/carnet-shared.keystore
+__pycache__/

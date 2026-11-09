@@ -34,6 +34,39 @@ formatting on the right English words; Excel formulas and formula literals untou
 switched to English; PDF page count, image count, all text inside the page; subtitle timings and Markdown
 structure kept. The remaining ~0.7% are formatted spans that straddle two sentences.
 
+## Real-world PDFs (106 documents, real model, visual + automatic checks)
+
+The synthetic PDFs above were too simple: a real 19-page report made in a browser (WeasyPrint) came out
+broken. `tools/realpdf/gen.py` now builds PDFs the way people actually make them — browser/WeasyPrint
+reports (justified text, cards, two columns, SVG charts with rotated axis titles, formulas, tables),
+Word documents exported by LibreOffice (first-line indents, coloured runs, bordered tables, images,
+headers/footers, font fallback for symbols and Chinese), slide decks exported to PDF, and worksheets with
+labelled diagrams and fill-in blanks — plus a French replica of that report (`expose_fr.html`).
+Each output was compared side by side with its original (`compare.py`) and checked automatically
+(`check.py`: page/image/drawing counts, overlapping text, text off the page, French left, shrunk text).
+
+Found and fixed:
+
+| Problem | Cause | Fix |
+|---|---|---|
+| Justified paragraphs shredded into one-word fragments | text stripper reports such lines word by word | lines collected whole, split only at real gaps |
+| Text 33% too large on browser PDFs | page transform (px → pt) ignored | size from the full text-rendering matrix |
+| Colours lost (blue headings → black) | colour operators not processed | colour operators registered |
+| Two-column pages merged across the gutter | position sorting | content-stream order + fragment re-joining |
+| Table cells merged / text spilling over borders | no knowledge of drawn lines | table borders and box edges detected; text never merges or grows across them |
+| Table of contents / list items merged into one paragraph | paragraph spacing ignored | line-pitch per box, word-wrap test |
+| Bullets lost, hanging indents lost | symbol-font bullets, marker merged with text | bullets kept in place, indents kept |
+| Formulas, page numbers redrawn in another font | everything was removed and redrawn | only replaced text is removed; the rest stays untouched |
+| Glyphs after removed text shifted | removal changed the text position | removed text replaced by an invisible move |
+| Chart labels doubled; rotated axis titles drawn flat | text inside form XObjects; rotation ignored | form text replaced; rotated text drawn rotated |
+| x̄, subscripts (uₙ), "∼" misplaced | out-of-order fragments, combining marks | fragments re-joined, marks centred on their letter |
+| Dot leaders "Nom : ……" doubled; LaTeX `\frac{}` translated | | leaders and formulas kept verbatim; formula lines translate only their words |
+| "Exercice 1" → "Year 1", "participes passés" → "participating pasts", "berlines" → "kernels", headings in CAPS translated badly | model errors | term guard with placeholders, school terms, CAPS translated in sentence case |
+| Chinese/Hindi text → hallucinated "(-------"; "energy, energy, energy…" loops; titles copied untranslated | model errors | foreign scripts shielded, loop/invented-number guard with beam retry, titles split at dashes |
+
+Result: 106 documents, 0 crashes, 105 pass every automatic check (the one flagged quotes French
+institution names, which stay in French). Median 2.2 s per document on the test machine. News BLEU unchanged (38.5 vs 38.6).
+
 ## Photos (3,000 images, layout checks)
 
 Ground-truth line boxes stand in for ML Kit (which only runs on the phone); blocks are translated and

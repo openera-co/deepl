@@ -40,7 +40,42 @@ object Segmenter {
 
     private fun isBreak(c: Char) = c == '\n' || c == '\r' || c == '\t' || c == '\u000B' || c == '\u2028' || c == '\u000C'
 
+    /** Dot leaders and fill-in blanks ("Nom : ........", "____") and wide gaps are kept verbatim. */
+    private val leader = Regex("[.…_·]{4,}|(?:\\. ){3,}\\.?|\t+| {3,}")
+
     private fun splitLine(line: String, out: MutableList<Segment>) {
+        var p = 0
+        for (m in leader.findAll(line)) {
+            if (m.range.first > p) splitPart(line.substring(p, m.range.first), out)
+            out.add(Segment(m.value, false)); p = m.range.last + 1
+        }
+        if (p == 0) splitPart(line, out) else if (p < line.length) splitPart(line.substring(p), out)
+    }
+
+    private val word = Regex("\\p{L}[\\p{L}'’-]*\\p{L}")
+    private const val MATH = "=+×÷/<>≤≥^_∑Σ√∫·→≠≈±∈∀∃∞"
+
+    /** A formula with a few words around it ("Moyenne = 25 / 5 = 5 jours", "x̄ = Σ xᵢ pour i = 1 … N"). */
+    fun isFormulaLine(t: String): Boolean {
+        if (t.none { it in MATH }) return false
+        val words = word.findAll(t).map { it.value }.filter { it.length >= 3 }.toList()
+        if (words.isEmpty() || words.size > 3) return false
+        val nonSpace = t.count { !it.isWhitespace() }
+        return words.sumOf { it.length } < nonSpace * 0.5
+    }
+
+    private fun splitPart(line: String, out: MutableList<Segment>) {
+        if (isFormulaLine(line)) {
+            // Only the words are translated; every symbol stays exactly where it is.
+            var p = 0
+            for (m in word.findAll(line)) {
+                if (m.value.length < 3) continue
+                if (m.range.first > p) out.add(Segment(line.substring(p, m.range.first), false))
+                out.add(Segment(m.value, true)); p = m.range.last + 1
+            }
+            if (p < line.length) out.add(Segment(line.substring(p), false))
+            return
+        }
         // Leading whitespace and list markers ("1.", "a)", "•", "–") stay untouched.
         val lead = Regex("^(\\s*(?:(?:[•●◦▪■–—\\-*·]|\\(?\\d{1,3}[.)]|\\(?[a-z][.)]|[A-Z]\\)|[IVXLC]{2,5}[.)]|[IVX]\\))\\s+)?)").find(line)
         var pos = 0
@@ -108,7 +143,13 @@ object Segmenter {
         for (ch in t) {
             if (ch.isLetter()) { letters++; cur++; if (cur > maxWord) maxWord = cur } else cur = 0
         }
-        if (letters == 0) return false
+        if (letters == 0 || maxWord <= 1) return false
+        // LaTeX-style formulas ("$\\bar{x} = \\frac{1}{N} \\sum x_i$"): no real word outside commands and braces.
+        if (t.any { it == '\\' || it == '{' || it == '$' }) {
+            var u = t.replace(latexCommand, " ")
+            repeat(3) { u = u.replace(braced, " ") }
+            if (u.split(Regex("[^\\p{L}]+")).none { it.length >= 4 }) return false
+        }
         // Formulas like "v = d / t" or "CH₄ + 2 O₂": no word longer than 2 letters and math symbols present.
         if (maxWord <= 2 && t.any { it in "=+×÷/<>≤≥^_∑√∫" }) return false
         // Chemical formulas / codes like "H2O", "CO₂", "A4"
@@ -116,6 +157,8 @@ object Segmenter {
         return true
     }
 
+    private val latexCommand = Regex("\\\\[a-zA-Z]+|[a-zA-Z]{1,4}(?=\\{)")
+    private val braced = Regex("\\{[^{}]*\\}")
     private val urlOrEmail = Regex("""(?i)^(https?://\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.]+)$""")
 
     private fun merge(segs: List<Segment>): List<Segment> {

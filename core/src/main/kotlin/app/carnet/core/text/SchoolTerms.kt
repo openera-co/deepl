@@ -29,17 +29,30 @@ object SchoolTerms {
         Term("le contrôle aura lieu", "the test will take place"),
         Term("exercices corrigés", "worked exercises"), Term("exercice corrigé", "worked exercise"), Term("corrigé de l'exercice", "answers to the exercise"),
         Term("devoir surveillé", "class test"), Term("devoirs surveillés", "class tests"),
+        Term("à retenir", "to remember"), Term("rappel de cours", "lesson summary"), Term("rappels de cours", "lesson summary"),
+        Term("classe de seconde", "Year 11 class"), Term("classe de première", "Year 12 class"), Term("classe de terminale", "Year 13 class"),
+        Term("en terminale", "in Year 13"), Term("en première", "in Year 12"), Term("en seconde", "in Year 11"),
+        Term("hockey sur gazon", "field hockey"), Term("fonction affine", "linear function"), Term("fonctions affines", "linear functions"),
+        Term("berline", "sedan"), Term("berlines", "sedans"), Term("contrôle de gestion", "management control"),
+    )
+
+    /** Patterns with a captured part kept as is ("Exercice 3" → "Exercise 3"). */
+    private val patterns: List<Pair<Regex, String>> = listOf(
+        Regex("(?<![\\p{L}])(?i:exercice)s?\\s+(\\d+|[IVX]{1,4}|[A-Z])(?![\\p{L}\\p{N}])") to "Exercise $1",
     )
 
     private val rules: List<Pair<Regex, String>> = terms.sortedByDescending { it.french.length }.map { t ->
-        Regex("(?i)(?<![\\p{L}\\p{N}])" + Regex.escape(t.french).replace("'", "['’]") + "(?![\\p{L}\\p{N}])") to t.english
+        Regex("(?iu)(?<![\\p{L}\\p{N}])" + Regex.escape(t.french).replace("'", "['’]") + "(?![\\p{L}\\p{N}])") to t.english
     }
 
-    fun matches(text: String): List<Pair<IntRange, String>> = rules.flatMap { (re, en) -> re.findAll(text).map { it.range to en }.toList() }
+    fun matches(text: String): List<Pair<IntRange, String>> =
+        rules.flatMap { (re, en) -> re.findAll(text).map { it.range to en }.toList() } +
+            patterns.flatMap { (re, en) -> re.findAll(text).map { m -> m.range to en.replace("$1", m.groupValues[1]) }.toList() }
 
     fun apply(text: String): String {
         var out = text
         for ((re, en) in rules) out = re.replace(out) { m -> if (m.value.first().isUpperCase()) en.replaceFirstChar { it.uppercase() } else en }
+        for ((re, en) in patterns) out = re.replace(out) { m -> en.replace("$1", m.groupValues[1]) }
         return out
     }
 }
