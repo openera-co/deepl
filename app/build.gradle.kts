@@ -1,0 +1,116 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+android {
+    namespace = "app.carnet"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "app.carnet"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+        ndk { abiFilters += listOf("arm64-v8a") }
+    }
+
+    signingConfigs {
+        // A fixed key in the repo so every CI build can update the previous install (debug-grade, not for store release).
+        create("shared") {
+            storeFile = file("carnet-shared.keystore")
+            storePassword = "carnet-shared"
+            keyAlias = "carnet"
+            keyPassword = "carnet-shared"
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("shared")
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+
+    buildFeatures { compose = true; buildConfig = true }
+
+    androidResources {
+        // Model files are memory-mapped/streamed; keep them uncompressed in the APK.
+        noCompress += listOf("onnx", "pieces", "bin", "gguf")
+    }
+
+    packaging {
+        resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
+        jniLibs.useLegacyPackaging = false
+    }
+}
+
+val modelDir = file("src/main/assets/models/opus-fr-en")
+tasks.register("checkModelAssets") {
+    doLast {
+        val need = listOf("encoder_model.int8.onnx", "decoder_model_merged.int8.onnx", "source.pieces", "target.pieces", "vocab.txt", "model.json")
+        val missing = need.filter { !File(modelDir, it).exists() }
+        if (missing.isNotEmpty()) throw GradleException(
+            "Translation model missing: $missing\nRun: python tools/export_model.py Helsinki-NLP/opus-mt-fr-en build/model && tools/install_model.sh build/model"
+        )
+    }
+}
+// The PDF translator is shared with the desktop test harness; rewrite its PDFBox imports for Android.
+val genPdf = layout.buildDirectory.dir("generated/pdfshared")
+val generatePdfShared by tasks.registering(Copy::class) {
+    from(rootProject.file("pdfshared"))
+    into(genPdf)
+    filter { line: String -> line.replace("org.apache.pdfbox", "com.tom_roush.pdfbox") }
+}
+android.sourceSets["main"].kotlin.srcDir(genPdf)
+tasks.named("preBuild") { dependsOn("checkModelAssets", generatePdfShared) }
+
+dependencies {
+    implementation(project(":core"))
+
+    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.animation:animation")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.navigation:navigation-compose:2.8.5")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-service:2.8.7")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    val camerax = "1.4.1"
+    implementation("androidx.camera:camera-core:$camerax")
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
+    // Bundled (offline) ML Kit models — no Google Play download needed.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.google.zxing:core:3.5.3")
+}

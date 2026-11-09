@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+/app/src/main/assets/models/
+/app/src/main/cpp/third_party/
+/captures/
+*.apk
+!/app/carnet-shared.keystore

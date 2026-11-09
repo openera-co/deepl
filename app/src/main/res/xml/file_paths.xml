@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="library" path="library/" />
+    <files-path name="models" path="models/" />
+    <cache-path name="cache" path="." />
+</paths>
