@@ -23,6 +23,7 @@ fun main(args: Array<String>) {
         "convert" -> convert(args.drop(1))
         "images" -> images(args.drop(1))
         "pdf" -> pdf(args.drop(1))
+        "real" -> real(args.drop(1))
         else -> error("usage: fidelity|mt …")
     }
 }
@@ -33,7 +34,7 @@ private fun engineFor(spec: String): SentenceTranslator =
 private fun mt(a: List<String>) {
     val model = MarianModel(DirectorySource(File(a[0])))
     val beam = a.getOrNull(3)?.toInt() ?: 1
-    val tr = TextTranslator(MarianSentenceTranslator(model, beam), schoolMode = a.getOrNull(4) != "noschool")
+    val tr = TextTranslator(MarianSentenceTranslator(model, beam), schoolMode = a.getOrNull(4) != "noschool", source = model.meta.source, target = model.meta.target)
     val src = File(a[1]).readLines()
     // Warm-up so the first-call cost isn't measured.
     tr.translate("Bonjour à tous.")
@@ -42,6 +43,32 @@ private fun mt(a: List<String>) {
     val sec = (System.nanoTime() - t0) / 1e9
     File(a[2]).writeText(out.joinToString("\n") + "\n")
     println("translated ${src.size} lines in ${"%.1f".format(sec)} s → ${"%.1f".format(src.size / sec)} lines/s, ${"%.0f".format(src.sumOf { it.length } / sec)} chars/s")
+}
+
+/** real <fake|modelDir> <outDir> <inputDir> : translates every file of a folder of downloaded documents; reports crashes and times. */
+private fun real(a: List<String>) {
+    val engine = engineFor(a[0]); val outDir = File(a[1]).also { it.mkdirs() }
+    val files = File(a[2]).walk().filter { it.isFile }.sortedBy { it.name }.toList()
+    val pool = Executors.newFixedThreadPool(if (a[0] == "fake") Runtime.getRuntime().availableProcessors() else 1)
+    val lines = java.util.Collections.synchronizedList(ArrayList<String>())
+    files.map { f -> pool.submit {
+        val ext = f.extension.lowercase()
+        val out = File(outDir, f.nameWithoutExtension + ".en." + ext)
+        val t0 = System.nanoTime()
+        val r = try {
+            val tr = TextTranslator(engine)
+            if (ext == "pdf") out.outputStream().use { app.carnet.pdf.PdfTranslator(AssetFonts()).translate(f, it, tr) }.toString()
+            else if (app.carnet.core.doc.DocFormat.fromName(f.name) == null) "UNSUPPORTED"
+            else f.inputStream().use { i -> out.outputStream().use { o -> Documents.translate(f.name, i, o, tr) } }.toString()
+        } catch (e: Throwable) { "CRASH ${e.javaClass.simpleName}: ${e.message?.take(150)} @ ${e.stackTrace.take(4).joinToString(" < ")}" }
+        lines.add("${f.name}\t${(System.nanoTime() - t0) / 1_000_000}\t$r")
+    } }.forEach { it.get() }
+    pool.shutdown()
+    File(outDir, "results.tsv").writeText(lines.sorted().joinToString("\n") + "\n")
+    val crashes = lines.filter { "\tCRASH" in it }
+    println("real: ${files.size} files, ${crashes.size} crashed, ${lines.count { "UNSUPPORTED" in it }} unsupported")
+    crashes.groupBy { it.split("\t")[2].substringBefore(" @").take(90) }.forEach { (k, v) -> println("  ${v.size} × $k  e.g. ${v.first().substringBefore('\t')}") }
+    if (engine is MarianSentenceTranslator) System.exit(0)
 }
 
 /** pdf <fake|modelDir> <outDir> <file.pdf>… : translates real PDFs for visual comparison. */

@@ -24,8 +24,13 @@ class TextTranslator(
     glossary: List<GlossaryEntry> = emptyList(),
     cacheSize: Int = 4096,
     /** Built-in school vocabulary and number normalisation (see SchoolTerms, FrenchNumbers). */
-    private val schoolMode: Boolean = true,
+    schoolMode: Boolean = true,
+    /** Source and target language ("fr" → "en" or "en" → "fr"). */
+    val source: String = "fr",
+    val target: String = "en",
 ) {
+    /** French school vocabulary and number words only apply when translating French into English. */
+    private val schoolMode = schoolMode && source == "fr" && target == "en"
     @Volatile private var glossaryRules: List<Pair<Regex, String>> = compile(glossary)
 
     private val cache = object : LinkedHashMap<String, String>(256, 0.75f, true) {
@@ -226,14 +231,26 @@ class TextTranslator(
         if (srcEnd == ':' && outEnd != ':') out = out.trimEnd('.', ' ') + ":"
         // A decoder loop that survived the careful retry: keep one occurrence.
         out = stutter.replace(out) { it.groupValues[1] }
-        // French spacing before punctuation must not leak into English.
-        out = out.replace(Regex("\\s+([:;!?%])"), "$1")
-        spelling?.let { out = app.carnet.core.text.Spelling.apply(out, it) }
+        if (target == "fr") out = frenchTypography(out)
+        else {
+            // French spacing before punctuation must not leak into English.
+            out = out.replace(Regex("\\s+([:;!?%])"), "$1")
+            spelling?.let { out = app.carnet.core.text.Spelling.apply(out, it) }
+        }
         // Preserve an initial lowercase (fragments inside formatted runs).
         val f = src.trimStart().firstOrNull()
         if (f != null && f.isLowerCase() && out.first().isUpperCase() && out.length > 1 && !out.startsWith("I ") && !(out[1].isUpperCase())) {
             out = out.first().lowercase() + out.substring(1)
         }
+        return out
+    }
+
+    /** French punctuation spacing: no-break space before : ; ! ? and inside « ». */
+    private fun frenchTypography(t: String): String {
+        var out = t.replace(Regex("\\s*([;:!?])(?=\\s|$|[»)\"])"), "\u00A0$1")
+        out = out.replace(Regex("«\\s*"), "«\u00A0").replace(Regex("\\s*»"), "\u00A0»")
+        // Times and URLs keep their colon untouched ("10:30", "https://").
+        out = out.replace(Regex("(\\d)\u00A0:(\\d)"), "$1:$2")
         return out
     }
 

@@ -37,6 +37,9 @@ data class ModelMeta(
     val numHeads: Int,
     val dModel: Int,
     val vocabSize: Int,
+    /** Language pair from the exported model id, e.g. "fr" → "en". */
+    val source: String = "fr",
+    val target: String = "en",
 ) {
     val headDim get() = dModel / numHeads
 
@@ -45,8 +48,10 @@ data class ModelMeta(
         fun parse(json: String): ModelMeta {
             fun int(key: String): Int = Regex("\"$key\"\\s*:\\s*(-?\\d+)").find(json)?.groupValues?.get(1)?.toInt()
                 ?: error("model.json missing $key")
+            val pair = Regex("\"model_id\"\\s*:\\s*\"[^\"]*-([a-z]{2,3})-([a-z]{2,3})\"").find(json)
             return ModelMeta(int("eos_id"), int("pad_id"), int("decoder_start_id"), int("unk_id"),
-                int("num_layers"), int("num_heads"), int("d_model"), int("vocab_size"))
+                int("num_layers"), int("num_heads"), int("d_model"), int("vocab_size"),
+                pair?.groupValues?.get(1) ?: "fr", pair?.groupValues?.get(2) ?: "en")
         }
     }
 }

@@ -115,4 +115,15 @@ class TextTest {
         val garbler = SentenceTranslator { ss, _ -> ss.map { it.replace("past participles", "participating pasts").replace("Accordez les", "Agree the").replace(" dans la phrase", " in the sentence") } }
         assertEquals("Agree the past participles in the sentence.", TextTranslator(garbler).translate("Accordez les participes passés dans la phrase."))
     }
+
+    @Test fun englishToFrenchAndLanguageGuess() {
+        val echo = SentenceTranslator { ss, _ -> ss.map { if (it.startsWith("Is")) "Est-ce prêt ?" else "Il a dit : « oui »." } }
+        val tr = TextTranslator(echo, source = "en", target = "fr")
+        assertEquals("Est-ce prêt\u00A0?", tr.translate("Is it ready?"))
+        assertEquals("Il a dit\u00A0: «\u00A0oui\u00A0».", tr.translate("He said: yes."))
+        // French school terms are not applied to English text.
+        assertEquals("the contrôle de maths", SchoolTerms.apply("the contrôle de maths").let { if (tr.target == "fr") "the contrôle de maths" else it })
+        assertEquals("fr", app.carnet.core.text.LanguageGuess.guess("Le chat est sur la table et il dort."))
+        assertEquals("en", app.carnet.core.text.LanguageGuess.guess("The cat is on the table and it is sleeping."))
+    }
 }

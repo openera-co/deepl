@@ -61,7 +61,7 @@ class PdfTranslator(private val fonts: FontProvider) {
         private var lastGlyph: TextPosition? = null
         override fun startPage(page: PDPage?) { opIndex = -1; depth = 0; super.startPage(page) }
         private var nested = 0
-        override fun processOperator(operator: Operator, operands: MutableList<org.apache.pdfbox.cos.COSBase>) {
+        override fun processOperator(operator: Operator, operands: MutableList<org.apache.pdfbox.cos.COSBase>?) {
             // Some operators run others internally (TD → TL + Td, ' → T* + Tj): count only stream tokens.
             val top = depth == 0 && nested == 0
             if (top) opIndex++
@@ -134,9 +134,9 @@ class PdfTranslator(private val fonts: FontProvider) {
 
         private inner class PathOp(private val op: String) : org.apache.pdfbox.contentstream.operator.OperatorProcessor() {
             override fun getName() = op
-            override fun process(operator: Operator, operands: MutableList<org.apache.pdfbox.cos.COSBase>) {
+            override fun process(operator: Operator, operands: MutableList<org.apache.pdfbox.cos.COSBase>?) {
                 if (depth > 0) { if (op in PAINT) segs.clear(); return }
-                val v = operands.map { (it as? org.apache.pdfbox.cos.COSNumber)?.floatValue() ?: 0f }
+                val v = (operands ?: emptyList()).map { (it as? org.apache.pdfbox.cos.COSNumber)?.floatValue() ?: 0f }
                 when (op) {
                     "re" -> if (v.size >= 4) {
                         val x = v[0]; val y = v[1]; val w = v[2]; val h = v[3]

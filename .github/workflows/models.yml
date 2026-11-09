@@ -1,0 +1,40 @@
+name: Publish models
+
+# Exports the translation models (FR→EN and EN→FR, best and fast), quantizes them and publishes them
+# with a checksummed catalog (models.json) as the GitHub release "models-v1". The app downloads from it.
+on:
+  workflow_dispatch:
+  push:
+    paths: [ "tools/export_model.py", "tools/quantize4.py", "tools/publish_models.py", ".github/workflows/models.yml" ]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Export and quantize
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "transformers<5" sentencepiece sacremoses onnx onnx_ir onnxruntime "optimum[onnxruntime]" accelerate
+          set -e
+          for pair in fr-en en-fr; do
+            python tools/export_model.py Helsinki-NLP/opus-mt-$pair m/$pair-fast
+            python tools/export_model.py Helsinki-NLP/opus-mt-tc-big-$pair m/big-$pair
+            python tools/quantize4.py m/big-$pair/fp32 m/$pair 32 4
+            cp m/big-$pair/*.pieces m/big-$pair/vocab.txt m/big-$pair/model.json m/$pair/
+            rm -rf m/big-$pair m/$pair-fast/fp32
+          done
+          du -sh m/*
+      - name: Catalog
+        run: python tools/publish_models.py m "https://github.com/${{ github.repository }}/releases/download/models-v1"
+      - name: Release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view models-v1 >/dev/null 2>&1 || gh release create models-v1 --title "Translation models" --notes "Model files the app downloads (Models screen). Not an app release." --prerelease --target ${{ github.sha }}
+          gh release upload models-v1 m/upload/* --clobber
