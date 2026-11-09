@@ -123,7 +123,7 @@ train = Lines(tr_imgs, tr_txt, aug=True)
 val = Lines(list(rimes["validation"]["image"])[:400], list(rimes["validation"]["text"])[:400])
 args = Seq2SeqTrainingArguments(output_dir="/tmp/ckpt", per_device_train_batch_size=24, per_device_eval_batch_size=24, learning_rate=6e-5,
     num_train_epochs=8, warmup_ratio=0.05, weight_decay=0.01, fp16=True, logging_steps=100, save_strategy="no", eval_strategy="epoch",
-    predict_with_generate=False, dataloader_num_workers=4, report_to=[], lr_scheduler_type="cosine", label_smoothing_factor=0.05)
+    predict_with_generate=False, dataloader_num_workers=4, report_to=[], lr_scheduler_type="cosine")
 trainer = Seq2SeqTrainer(model=model, args=args, train_dataset=train, eval_dataset=val, data_collator=default_data_collator)
 t0 = time.time(); trainer.train(); log["train_minutes"] = round((time.time() - t0) / 60, 1); save_log()
 model = trainer.model.cuda()
