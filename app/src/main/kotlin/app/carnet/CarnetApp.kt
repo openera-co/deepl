@@ -22,7 +22,8 @@ import kotlinx.coroutines.launch
 
 /** Process-wide singletons. Everything is created lazily so app start stays instant. */
 class CarnetApp : Application() {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** App-wide scope; failures are logged, never fatal. */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> android.util.Log.e("Carnet", "background task failed", e) })
     val settings by lazy { Settings(this) }
     val engine by lazy { Engine(this) }
     val library by lazy { Library(this) }

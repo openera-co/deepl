@@ -101,8 +101,9 @@ class Engine(private val context: Context) {
 
     suspend fun translate(text: String): String = translate(listOf(text))[0]
 
-    suspend fun setGlossary(g: List<GlossaryEntry>) { translator().setGlossary(g) }
-    suspend fun setSpelling(s: String) { translator().spelling = s }
+    // Settings sync must never crash the app if the engine failed to start.
+    suspend fun setGlossary(g: List<GlossaryEntry>) { runCatching { translator().setGlossary(g) } }
+    suspend fun setSpelling(s: String) { runCatching { translator().spelling = s } }
 
     /** Exclusive access for long jobs (documents) that call the translator many times. */
     suspend fun <T> exclusive(block: suspend (TextTranslator) -> T): T {

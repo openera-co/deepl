@@ -47,6 +47,16 @@ android {
 
     buildFeatures { compose = true; buildConfig = true }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                it.maxHeapSize = "3g"
+                it.systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2")
+            }
+        }
+    }
+
     androidResources {
         // Model files are memory-mapped/streamed; keep them uncompressed in the APK.
         noCompress += listOf("onnx", "pieces", "bin", "gguf")
@@ -119,4 +129,10 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("com.google.zxing:core:3.5.3")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test:core-ktx:1.6.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
