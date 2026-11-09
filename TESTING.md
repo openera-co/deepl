@@ -73,7 +73,34 @@ Ground-truth line boxes stand in for ML Kit (which only runs on the phone); bloc
 redrawn with the same layout code as the app. 0 crashes; text never leaves the image; no two translated
 blocks overlap. French ink is removed pixel-by-pixel, so ruled notebook lines and coloured backgrounds stay.
 
-## Translation quality (real model)
+## Translation models (both directions)
+
+Since 1.2 the app downloads its models (Models screen) instead of bundling them. "Best" is Opus-MT
+tc-big with 4-bit weights (224 MB per direction); "fast" is Opus-MT base int8 (109 MB). Scores on 300
+FLORES sentences (Wikipedia-style text, professional references); speed is the app's Kotlin pipeline
+on a 4-core ARM64 CI runner (same ONNX Runtime kernels as Android; a phone is roughly half as fast).
+
+| System | FR→EN BLEU | FR→EN COMET | EN→FR BLEU | EN→FR COMET | Sentences/s (ARM64) |
+|---|---|---|---|---|---|
+| App, best | 43.8 | 0.891 | 51.5 | 0.879 | 6.4–8.8 |
+| App, fast | 39.8 | — | 45.8 | — | 10–16 |
+| tc-big, beam 4 (Careful mode) | 44.4 | 0.892 | 51.8 | 0.881 | — |
+| TranslateGemma 4B (Q4, llama.cpp) | 37.1 | 0.887 | — | — | 0.17 (x86 CPU) |
+| Qwen3 14B (GPU) | 43.2 | 0.896 | 44.4 | 0.880 | — |
+| Mistral Small 24B (GPU) | 43.6 | 0.895 | 48.9 | 0.889 | — |
+
+The phone model is within ~0.5 COMET of models 60–100× larger for FR→EN, and ahead of TranslateGemma
+4B while ~40× faster. These large models were measured as possible teachers for further training
+(`tools/kaggle/teacher_eval`).
+
+## Real downloaded documents
+
+742 openly licensed French files (`tools/realdocs/fetch.py`): theses, articles and lecture notes from
+HAL, and public-sector PDF/Word/Excel/ODF files from data.gouv.fr. 667 supported files translated with
+0 crashes (after fixing PDF operators with missing operands and reading PDF pages one by one so a damaged
+page can't fail the file). The other 75 are old binary .doc/.xls files, which aren't supported.
+
+## Translation quality, earlier base model (FR→EN)
 
 Opus-MT fr-en, int8 ONNX (101 MB), run through the app's Kotlin pipeline:
 
