@@ -87,11 +87,15 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val lines = ArrayList<TextLine>()
         val angles = ArrayList<Float>()
         val blocks = text.textBlocks.sortedWith(compareBy({ it.boundingBox?.top ?: 0 }, { it.boundingBox?.left ?: 0 }))
+        // French pages get the recognizer's systematic French mistakes corrected (accents on capitals,
+        // "I'" for "l'", "ler" for "1er", "oe" for "œ"…; see OcrFix and the OCR benchmark).
+        val french = app.carnet.core.text.LanguageGuess.guess(text.text) == "fr"
         for (b in blocks) for (l in b.lines) {
             val r = l.boundingBox ?: continue
             val h = r.height().toFloat()
-            lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), l.text, h * 0.98f,
-                runs = listOf(app.carnet.core.layout.StyledRun(l.text, Style()))))
+            val t = app.carnet.core.text.OcrFix.fix(l.text, french)
+            lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), t, h * 0.98f,
+                runs = listOf(app.carnet.core.layout.StyledRun(t, Style()))))
             angles.add(l.angle)
         }
         return lines to angles

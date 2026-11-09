@@ -126,4 +126,17 @@ class TextTest {
         assertEquals("fr", app.carnet.core.text.LanguageGuess.guess("Le chat est sur la table et il dort."))
         assertEquals("en", app.carnet.core.text.LanguageGuess.guess("The cat is on the table and it is sleeping."))
     }
+
+    @Test fun frenchOcrFixes() {
+        val fix = { t: String -> app.carnet.core.text.OcrFix.fix(t, true) }
+        assertEquals("Les États-Unis et l'Antiquité.", fix("Les Etats-Unis et I'Antiquité."))
+        assertEquals("À la fin du XVIIIe siècle, le 1er mai", fix("A la fin du XVIlle siècle, le ler mai"))
+        assertEquals("le cœur de la laïcité", fix("le coeur de la laicité"))
+        assertEquals("François Ier et l'Île de France", fix("François Ier et l'Ile de France"))
+        assertEquals("deux travaux en 10 jours", fix("deuX travauxX en 1O jours"))
+        assertEquals("Attention\u00A0: 10:30", fix("Attention: 10:30"))
+        // English text is never touched.
+        val en = "I'm sure the coeur and Etats were A la carte: fine."
+        assertEquals(en, app.carnet.core.text.OcrFix.fix(en))
+    }
 }

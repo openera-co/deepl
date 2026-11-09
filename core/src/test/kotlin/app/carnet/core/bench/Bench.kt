@@ -24,6 +24,7 @@ fun main(args: Array<String>) {
         "images" -> images(args.drop(1))
         "pdf" -> pdf(args.drop(1))
         "real" -> real(args.drop(1))
+        "ocrfix" -> ocrFix(args.drop(1))
         else -> error("usage: fidelity|mt …")
     }
 }
@@ -43,6 +44,22 @@ private fun mt(a: List<String>) {
     val sec = (System.nanoTime() - t0) / 1e9
     File(a[2]).writeText(out.joinToString("\n") + "\n")
     println("translated ${src.size} lines in ${"%.1f".format(sec)} s → ${"%.1f".format(src.size / sec)} lines/s, ${"%.0f".format(src.sumOf { it.length } / sec)} chars/s")
+}
+
+/** ocrfix <in.json> <out.json>: applies the French OCR post-correction to recorded OCR output (tools/ocr). */
+private fun ocrFix(a: List<String>) {
+    @Suppress("UNCHECKED_CAST") val o = app.carnet.core.TestJson.parse(File(a[0]).readText()) as Map<String, Any?>
+    @Suppress("UNCHECKED_CAST") val res = o["results"] as List<Map<String, Any?>>
+    val sb = StringBuilder("{\"variant\":\"${o["variant"]}+fix\",\"results\":[")
+    fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    res.forEachIndexed { i, r ->
+        @Suppress("UNCHECKED_CAST") val lines = r["lines"] as List<String>
+        val french = app.carnet.core.text.LanguageGuess.guess(lines.joinToString(" ")) == "fr"
+        val fixed = lines.map { app.carnet.core.text.OcrFix.fix(it, french) }
+        if (i > 0) sb.append(',')
+        sb.append("{\"file\":${q(r["file"] as String)},\"ms\":${(r["ms"] as Number).toLong()},\"lines\":[${fixed.joinToString(",") { q(it) }}]}")
+    }
+    File(a[1]).writeText(sb.append("]}").toString())
 }
 
 /** real <fake|modelDir> <outDir> <inputDir> : translates every file of a folder of downloaded documents; reports crashes and times. */
