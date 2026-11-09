@@ -93,6 +93,30 @@ The phone model is within ~0.5 COMET of models 60–100× larger for FR→EN, an
 4B while ~40× faster. These large models were measured as possible teachers for further training
 (`tools/kaggle/teacher_eval`).
 
+## OCR (the app's real recognizer on an Android emulator)
+
+`.github/workflows/ocr.yml` runs ML Kit inside the app (same code as the Scan screen) on 200 generated
+photos with known text (`tools/ocr/make_set.py`): printed pages on white/cream/coloured paper, lined
+notebooks, slides and blackboards (blur, rotation), and handwriting-style pages in open-licence
+handwriting fonts. Scored by character/word error rate (`tools/ocr/score.py`).
+
+| Category | CER before | CER with French fixes | WER before | WER with French fixes |
+|---|---|---|---|---|
+| Paper | 0.33% | 0.16% | 2.4% | 1.2% |
+| Cream | 0.33% | 0.14% | 2.3% | 1.0% |
+| Coloured | 0.34% | 0.22% | 2.1% | 1.0% |
+| Blackboard | 0.40% | 0.22% | 3.0% | 1.5% |
+| Slide | 0.43% | 0.16% | 2.9% | 1.0% |
+| Lined notebook | 0.79% | 0.58% | 5.1% | 3.4% |
+| Handwriting-style fonts | 3.44% | 3.34% | 17.3% | 16.6% |
+
+The French fixes (`OcrFix`) correct what the recognizer gets wrong systematically on French: accents
+dropped on capitals (États, À, Âge), "I'" for "l'", "ler" for "1er", Roman numerals with l, "oe" for
+œ, lost ï, stray capital X, "1O" for 10, foreign diacritics, French spacing before : ; ! ?. English
+is never changed. Image preprocessing (invert dark boards, upscale, local contrast) was measured and
+didn't help, so it stays off. Real handwriting is harder than handwriting fonts: a dedicated
+recognizer is being trained (`tools/kaggle/htr_train`, RIMES-2011 French handwriting lines).
+
 ## Real downloaded documents
 
 742 openly licensed French files (`tools/realdocs/fetch.py`): theses, articles and lecture notes from
