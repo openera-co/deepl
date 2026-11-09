@@ -1,0 +1,67 @@
+name: Speed benchmark
+
+# Measures translation speed and quality of the app's Kotlin pipeline (same ONNX Runtime kernels as
+# Android) on x86-64 and ARM64 CPUs, for each model variant. Results go to the job summary.
+on:
+  workflow_dispatch:
+  push:
+    paths: [ "core/src/main/**", "tools/export_model.py", "tools/quantize4.py", ".github/workflows/speed.yml" ]
+
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: models
+          key: speed-models-${{ hashFiles('tools/export_model.py', 'tools/quantize4.py') }}
+      - uses: actions/setup-python@v5
+        if: steps.cache.outputs.cache-hit != 'true'
+        with: { python-version: "3.11" }
+      - name: Export models
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "transformers<5" sentencepiece sacremoses onnx onnxruntime "optimum[onnxruntime]" accelerate
+          python tools/export_model.py Helsinki-NLP/opus-mt-fr-en models/base
+          python tools/export_model.py Helsinki-NLP/opus-mt-tc-big-fr-en models/big
+          python tools/quantize4.py models/big/fp32 models/big4 32 4
+          cp models/big/*.pieces models/big/vocab.txt models/big/model.json models/big4/
+          rm -rf models/base/fp32 models/big/fp32
+      - uses: actions/upload-artifact@v4
+        with: { name: models, path: models, retention-days: 3 }
+
+  bench:
+    needs: models
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, ubuntu-24.04-arm ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: models, path: models }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Benchmark
+        run: |
+          pip install sacrebleu > /dev/null 2>&1 || pip install --break-system-packages sacrebleu > /dev/null
+          echo "### $(uname -m), $(nproc) cores: $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)" >> $GITHUB_STEP_SUMMARY
+          echo "| model | size | set | sentences/s | BLEU | chrF |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          for m in base big big4; do
+            size=$(du -cm models/$m/*.onnx | tail -1 | cut -f1)
+            for s in flores300 news500; do
+              out=$(./gradlew -q :core:bench -PbenchArgs="mt $PWD/models/$m $PWD/tools/eval/data/$s.fr $PWD/$m.$s.en" 2>&1 | grep translated)
+              rate=$(echo "$out" | sed -E 's/.* ([0-9.]+) lines\/s.*/\1/')
+              score=$(sacrebleu tools/eval/data/$s.en -i $m.$s.en -m bleu chrf -b | tr '\n' ' ')
+              echo "| $m | ${size} MB | $s | $rate | $score |" >> $GITHUB_STEP_SUMMARY
+              echo "$m $s $out $score"
+            done
+          done
