@@ -70,7 +70,7 @@ private fun real(a: List<String>) {
     val lines = java.util.Collections.synchronizedList(ArrayList<String>())
     files.map { f -> pool.submit {
         val ext = f.extension.lowercase()
-        val out = File(outDir, f.nameWithoutExtension + ".en." + ext)
+        val out = File(outDir, f.nameWithoutExtension + ".en." + if (ext == "pdf") ext else Documents.outputExtension(f.name))
         val t0 = System.nanoTime()
         val r = try {
             val tr = TextTranslator(engine)

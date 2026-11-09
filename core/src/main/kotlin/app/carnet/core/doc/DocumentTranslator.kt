@@ -9,6 +9,11 @@ enum class DocFormat(val extensions: Set<String>) {
     PPTX(setOf("pptx", "pptm", "potx", "ppsx")),
     XLSX(setOf("xlsx", "xlsm", "xltx")),
     ODF(setOf("odt", "ods", "odp", "ott", "odg")),
+    /** Word 97–2003: translated into .docx. */
+    DOC(setOf("doc", "dot")),
+    /** Excel 97–2003: translated in place. */
+    XLS(setOf("xls", "xlt")),
+    RTF(setOf("rtf")),
     TXT(setOf("txt", "md", "csv", "srt", "vtt", "html", "htm"));
 
     companion object {
@@ -28,7 +33,9 @@ data class TranslateOptions(
     val bilingual: Boolean = false,
 )
 
-data class DocStats(var paragraphs: Int = 0, var translated: Int = 0, var characters: Int = 0, var parts: Int = 0)
+data class DocStats(var paragraphs: Int = 0, var translated: Int = 0, var characters: Int = 0, var parts: Int = 0,
+    /** Extension the translated file must have when it differs from the input's (.doc → .docx). */
+    var outputExtension: String? = null)
 
 interface Progress {
     /** [done] of [total] translation units finished. */
@@ -72,12 +79,38 @@ object Documents {
         DocFormat.PPTX -> DrawingMLTranslator(DrawingMLTranslator.Kind.PPTX)
         DocFormat.XLSX -> XlsxTranslator()
         DocFormat.ODF -> OdfTranslator()
-        DocFormat.TXT -> null
+        DocFormat.TXT, DocFormat.DOC, DocFormat.XLS, DocFormat.RTF -> null
+    }
+
+    /** Extension of the translated file before looking at its content (old .doc files become .docx). */
+    fun outputExtension(name: String): String {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return if (DocFormat.fromName(name) == DocFormat.DOC) "docx" else ext
     }
 
     /** Translates any supported file. Plain-text formats are handled line by line. */
     fun translate(name: String, input: InputStream, output: OutputStream, translator: TextTranslator, options: TranslateOptions = TranslateOptions(), progress: Progress = object : Progress {}): DocStats {
-        val format = DocFormat.fromName(name) ?: throw IllegalArgumentException("Unsupported file type: $name")
+        var format = DocFormat.fromName(name) ?: throw IllegalArgumentException("Unsupported file type: $name")
+        // Files are often saved under the wrong extension: decide by content for the old formats.
+        val buf = java.io.BufferedInputStream(input, 1 shl 16).apply { mark(16) }
+        val head = ByteArray(8).let { b -> val n = buf.read(b); buf.reset(); String(b, 0, maxOf(0, n), Charsets.ISO_8859_1) }
+        if (format == DocFormat.DOC || format == DocFormat.XLS || format == DocFormat.RTF) {
+            val isZip = head.startsWith("PK")
+            val isRtf = head.startsWith("{\\rtf")
+            val isMarkup = head.trimStart('\uFEFF', ' ', '\r', '\n', '\t').startsWith("<")
+            when {
+                isZip -> {
+                    val modern = if (format == DocFormat.XLS) DocFormat.XLSX else DocFormat.DOCX
+                    return translatorFor(modern)!!.translate(buf, output, translator, options, progress).also { it.outputExtension = if (modern == DocFormat.XLSX) "xlsx" else "docx" }
+                }
+                isRtf -> return RtfTranslator.translate(buf, output, translator, progress).also { if (format != DocFormat.RTF) it.outputExtension = "rtf" }
+                isMarkup -> return PlainText.translate("file.html", buf, output, translator, progress)
+                format == DocFormat.RTF -> throw IllegalArgumentException("This file is empty or damaged")
+            }
+        }
+        if (format == DocFormat.DOC) return LegacyOffice.translateDoc(buf, output, translator, options, progress).also { it.outputExtension = "docx" }
+        if (format == DocFormat.XLS) return LegacyOffice.translateXls(buf, output, translator, progress)
+        @Suppress("NAME_SHADOWING") val input = buf
         val zone = translatorFor(format)
         if (zone != null) return zone.translate(input, output, translator, options, progress)
         return PlainText.translate(name, input, output, translator, progress)

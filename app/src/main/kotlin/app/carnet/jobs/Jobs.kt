@@ -116,7 +116,7 @@ class Jobs(private val context: Context) {
                     }
                     else -> {
                         val fmt = DocFormat.fromName(src.name) ?: throw IllegalArgumentException("This file type isn't supported yet: .$ext")
-                        val out = File(dir, "result.$ext")
+                        var out = File(dir, "result.$ext")
                         val stats = context.app.engine.exclusive(sample) { tr ->
                             out.outputStream().use { o ->
                                 src.inputStream().use { i ->
@@ -124,6 +124,8 @@ class Jobs(private val context: Context) {
                                 }
                             }
                         }
+                        // Old .doc files come back as .docx (and mislabelled files as what they really are).
+                        stats.outputExtension?.takeIf { it != ext }?.let { e -> File(dir, "result.$e").also { out.renameTo(it); out = it } }
                         meta["paragraphs"] = stats.paragraphs.toString()
                         resultName = if ((saveAsPdf ?: (settings.saveAs == "pdf")) && fmt != DocFormat.TXT) {
                             flow.value = flow.value.copy(stage = "Making PDF")

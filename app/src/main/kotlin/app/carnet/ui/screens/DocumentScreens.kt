@@ -89,6 +89,7 @@ val PICK_TYPES = arrayOf(
     "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.spreadsheet", "application/vnd.oasis.opendocument.presentation",
+    "application/msword", "application/vnd.ms-excel", "application/rtf", "text/rtf",
     "text/plain", "text/markdown", "text/csv", "application/x-subrip", "text/html", "image/*", "application/octet-stream",
 )
 

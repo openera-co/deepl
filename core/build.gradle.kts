@@ -13,6 +13,8 @@ val ortVersion = "1.31.1"
 sourceSets["test"].kotlin.srcDir("../pdfshared")
 
 dependencies {
+    // Old binary Office files (.doc, .xls).
+    implementation("org.apache.poi:poi-scratchpad:5.2.5")
     testImplementation("org.apache.pdfbox:pdfbox:2.0.32")
     // The Android app supplies onnxruntime-android (same ai.onnxruntime API); desktop runtime for tests and tools.
     compileOnly("com.microsoft.onnxruntime:onnxruntime:$ortVersion")

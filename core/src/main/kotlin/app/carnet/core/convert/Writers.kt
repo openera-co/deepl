@@ -47,7 +47,8 @@ object DocxWriter {
                 }
                 is ImageRun -> {
                     imageId++
-                    val ext = when { i.mime.contains("png") -> "png"; i.mime.contains("jp") -> "jpeg"; else -> i.mime.substringAfter('/') }
+                    val ext = when { i.mime.contains("png") -> "png"; i.mime.contains("jp") -> "jpeg"; i.mime.contains("wmf") -> "wmf"; i.mime.contains("emf") -> "emf"
+                        i.mime.contains("gif") -> "gif"; i.mime.contains("bmp") -> "bmp"; i.mime.contains("tif") -> "tiff"; else -> "png" }
                     val name = "image$imageId.$ext"
                     media["word/media/$name"] = i.data
                     rels.append("<Relationship Id=\"rImg$imageId\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/$name\"/>")
@@ -125,6 +126,7 @@ object DocxWriter {
         files["[Content_Types].xml"] = (decl + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
             "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
             "<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/><Default Extension=\"jpg\" ContentType=\"image/jpeg\"/><Default Extension=\"gif\" ContentType=\"image/gif\"/>" +
+            "<Default Extension=\"wmf\" ContentType=\"image/x-wmf\"/><Default Extension=\"emf\" ContentType=\"image/x-emf\"/><Default Extension=\"bmp\" ContentType=\"image/bmp\"/><Default Extension=\"tiff\" ContentType=\"image/tiff\"/>" +
             "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>" +
             "<Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>" +
             "<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/></Types>").toByteArray()
