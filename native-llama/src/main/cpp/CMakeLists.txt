@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.22)
+project(carnet_llama C CXX)
+set(CMAKE_CXX_STANDARD 17)
+include(FetchContent)
+
+# llama.cpp (pinned). A local checkout can be used with -DLLAMA_SRC=/path.
+set(LLAMA_TAG b12211)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
+set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
+set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod" CACHE STRING "" FORCE)
+
+if (DEFINED LLAMA_SRC AND EXISTS ${LLAMA_SRC})
+    add_subdirectory(${LLAMA_SRC} llama-build)
+else()
+    FetchContent_Declare(llama GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git GIT_TAG ${LLAMA_TAG} GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(llama)
+endif()
+
+add_library(carnet_llama SHARED gemma_jni.cpp)
+target_link_libraries(carnet_llama PRIVATE mtmd llama ggml log android)
+# Keep ggml/llama symbols private so they never clash with the whisper library's own copy.
+target_link_options(carnet_llama PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections)
+set_target_properties(carnet_llama PROPERTIES CXX_VISIBILITY_PRESET hidden)

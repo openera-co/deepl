@@ -195,7 +195,7 @@ fun ScanScreen(nav: NavHostController, settings: AppSettings) {
                             modifier = Modifier.clip(CircleShape).background(if (i == mode) Color.White.copy(alpha = 0.16f) else Color.Transparent).tap { mode = i }.padding(horizontal = 14.dp, vertical = 8.dp))
                     }
                 }
-                if (mode == 1 && !ctx.app.models.isInstalled("handwriting")) {
+                if (mode == 1 && !ctx.app.models.isInstalled("handwriting") && ctx.app.models.supported("handwriting")) {
                     Text("Get the handwriting model for best results", color = Color(0xFFB9BCC3), fontSize = 12.sp,
                         modifier = Modifier.padding(top = 8.dp).tap { nav.navigate("models") })
                 }

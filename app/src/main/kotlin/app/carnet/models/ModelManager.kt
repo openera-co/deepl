@@ -64,6 +64,13 @@ class ModelManager(private val context: Context) {
     private val jobs = HashMap<String, Job>()
 
     fun spec(id: String) = catalog.first { it.id == id }
+
+    /** Optional models need their native engine in this build and a compatible CPU. */
+    fun supported(id: String): Boolean = when {
+        id == "handwriting" -> app.carnet.nativeai.NativeLib.llamaLoaded
+        id.startsWith("whisper") -> app.carnet.nativeai.NativeLib.whisperLoaded
+        else -> true
+    }
     fun dir(id: String) = File(root, id)
     fun file(id: String, name: String) = File(dir(id), name)
     fun isInstalled(id: String) = _status.value[id] is ModelStatus.Installed

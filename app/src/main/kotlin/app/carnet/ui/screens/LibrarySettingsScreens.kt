@@ -221,7 +221,9 @@ fun ModelsScreen(nav: NavHostController, s: AppSettings) {
             }
             SectionLabel("Downloads")
             Card {
-                ctx.app.models.catalog.filter { !it.builtIn }.forEachIndexed { i, m ->
+                val optional = ctx.app.models.catalog.filter { !it.builtIn && ctx.app.models.supported(it.id) }
+                if (optional.isEmpty()) SettingRow("No optional models for this phone", chevron = false)
+                optional.forEachIndexed { i, m ->
                     if (i > 0) Divider()
                     ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) })
                 }

@@ -108,7 +108,7 @@ fun SetupScreen(nav: NavHostController) {
                 StatusRow("Translation", when (engine) { Engine.State.Ready -> "Ready"; Engine.State.Loading -> "Preparing…"; Engine.State.Failed -> "Error" }, engine == Engine.State.Ready)
                 Divider()
                 StatusRow("Printed text", "Ready", true)
-                for (id in listOf("handwriting", "whisper-small")) {
+                for (id in listOf("handwriting", "whisper-small").filter { ctx.app.models.supported(it) }) {
                     Divider()
                     val spec = ctx.app.models.spec(id)
                     ModelRow(spec.title, formatSize(spec.size), models[id] ?: ModelStatus.NotInstalled, onGet = { ctx.app.models.download(id) }, onPause = { ctx.app.models.pause(id) })

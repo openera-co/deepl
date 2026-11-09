@@ -44,9 +44,8 @@ class Engine(private val context: Context) {
     fun start(glossary: List<GlossaryEntry>, spelling: String) {
         scope.launch {
             try {
-                unpack()
                 val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
-                val m = MarianModel(DirectorySource(modelDir), threads = threads)
+                val m = MarianModel(AssetSource(context, "models/opus-fr-en"), threads = threads)
                 model = m
                 val sentence = SentenceTranslator { s, cancel -> m.translate(s, beam = beam, cancel = cancel) }
                 val tr = TextTranslator(sentence, glossary)
@@ -64,6 +63,17 @@ class Engine(private val context: Context) {
         }
     }
 
+    /** Reads the bundled model straight from the APK; .onnx files are stored uncompressed and memory-mapped. */
+    private class AssetSource(private val context: Context, private val dir: String) : app.carnet.core.mt.ModelSource {
+        override fun open(name: String): ByteArray = context.assets.open("$dir/$name").use { it.readBytes() }
+        override fun buffer(name: String): java.nio.ByteBuffer? = if (!name.endsWith(".onnx")) null else runCatching {
+            context.assets.openFd("$dir/$name").use { afd ->
+                java.io.FileInputStream(afd.fileDescriptor).channel.use { ch -> ch.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.length) }
+            }
+        }.getOrNull()
+    }
+
+    @Suppress("unused")
     private fun unpack() {
         val names = context.assets.list("models/opus-fr-en") ?: emptyArray()
         val stamp = File(modelDir, ".version")

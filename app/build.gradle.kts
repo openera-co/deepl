@@ -53,7 +53,9 @@ android {
     }
 
     packaging {
-        resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*")
+        resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*",
+            // Post-quantum crypto tables pulled in by PdfBox's BouncyCastle; never used.
+            "org/bouncycastle/pqc/**", "org/bouncycastle/x509/**")
         jniLibs.useLegacyPackaging = false
     }
 }
@@ -80,6 +82,10 @@ tasks.named("preBuild") { dependsOn("checkModelAssets", generatePdfShared) }
 
 dependencies {
     implementation(project(":core"))
+    if (providers.gradleProperty("carnet.native").orNull == "true") {
+        implementation(project(":native-llama"))
+        implementation(project(":native-whisper"))
+    }
 
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)

@@ -225,7 +225,8 @@ fun TranscriptScreen(nav: NavHostController, id: String) {
                     Spacer(Modifier.height(8.dp)); ProgressBar(p, height = 6.dp, track = pal.surface)
                 }
             }
-            if (audio != null && improve[id] == null && !ctx.app.models.isInstalled("whisper-small") && !ctx.app.models.isInstalled("whisper-turbo"))
+            if (!ctx.app.models.supported("whisper-small")) Unit
+            else if (audio != null && improve[id] == null && !ctx.app.models.isInstalled("whisper-small") && !ctx.app.models.isInstalled("whisper-turbo"))
                 Btn("Get Improve model", Modifier.fillMaxWidth(), kind = BtnKind.Soft) { nav.navigate("models") }
             else if (audio != null && improve[id] == null) Btn("Improve transcript", Modifier.fillMaxWidth(), kind = BtnKind.Soft) { Whisper.improveInBackground(ctx, id) }
         }

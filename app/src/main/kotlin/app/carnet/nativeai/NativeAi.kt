@@ -22,7 +22,10 @@ import java.io.RandomAccessFile
 
 /** JNI bridge to the bundled native engines (llama.cpp, whisper.cpp). */
 object NativeLib {
-    val loaded: Boolean by lazy { runCatching { System.loadLibrary("carnet_native") }.isSuccess }
+    /** The engines are built for ARMv8.2 dot-product CPUs (most phones since 2018). */
+    private val cpuOk: Boolean by lazy { runCatching { java.io.File("/proc/cpuinfo").readText().contains("asimddp") }.getOrDefault(false) }
+    val whisperLoaded: Boolean by lazy { cpuOk && runCatching { System.loadLibrary("carnet_whisper") }.isSuccess }
+    val llamaLoaded: Boolean by lazy { cpuOk && runCatching { System.loadLibrary("carnet_llama") }.isSuccess }
 
     // whisper.cpp
     @JvmStatic external fun whisperInit(model: String, threads: Int): Long
@@ -52,7 +55,7 @@ object Whisper {
     fun improveInBackground(context: Context, id: String) {
         val mm = context.app.models
         val model = listOf("whisper-turbo", "whisper-small").firstOrNull { mm.isInstalled(it) } ?: return
-        if (!NativeLib.loaded) return
+        if (!NativeLib.whisperLoaded) return
         _progress.value = _progress.value + (id to 0f)
         context.app.scope.launch(Dispatchers.Default) {
             lock.withLock {
@@ -97,7 +100,7 @@ class Gemma private constructor(private val context: Context) {
 
     private suspend fun <T> withModel(block: (Long) -> T): T = lock.withLock {
         withContext(Dispatchers.Default) {
-            check(NativeLib.loaded) { "The handwriting engine isn't available in this build" }
+            check(NativeLib.llamaLoaded) { "The handwriting engine isn't supported on this phone" }
             val mm = context.app.models
             check(mm.isInstalled("handwriting")) { "Download the handwriting model first" }
             val h = NativeLib.gemmaInit(mm.file("handwriting", "model.gguf").path, mm.file("handwriting", "vision.gguf").path, threads(), 4096)

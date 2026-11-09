@@ -18,6 +18,9 @@ fun interface ModelSource {
 
     /** A file path for [name] if available; lets ONNX Runtime load large models without a Java heap copy. */
     fun path(name: String): String? = null
+
+    /** A direct (e.g. memory-mapped) buffer for [name]; preferred over [path] when available. */
+    fun buffer(name: String): java.nio.ByteBuffer? = null
 }
 
 class DirectorySource(private val dir: File) : ModelSource {
@@ -77,8 +80,10 @@ class MarianModel(
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
         }
-        encoder = source.path(encoderFile)?.let { env.createSession(it, opts) } ?: env.createSession(source.open(encoderFile), opts)
-        decoder = source.path(decoderFile)?.let { env.createSession(it, opts) } ?: env.createSession(source.open(decoderFile), opts)
+        fun session(name: String): OrtSession = source.buffer(name)?.let { env.createSession(it, opts) }
+            ?: source.path(name)?.let { env.createSession(it, opts) } ?: env.createSession(source.open(name), opts)
+        encoder = session(encoderFile)
+        decoder = session(decoderFile)
     }
 
     private val decInputNames = decoder.inputNames
