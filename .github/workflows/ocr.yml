@@ -41,9 +41,12 @@ jobs:
           script: |
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell mkdir -p /sdcard/Android/data/app.carnet/files/ocrbench/in
-            adb push ocrset/. /sdcard/Android/data/app.carnet/files/ocrbench/in/ > /dev/null
-            for v in default auto contrast all; do adb shell am instrument -w -e class app.carnet.OcrBench -e variant $v app.carnet.test/androidx.test.runner.AndroidJUnitRunner; adb pull /sdcard/Android/data/app.carnet/files/ocrbench/out-$v.json .; done
+            adb shell mkdir -p /data/local/tmp/ocrbench
+            adb push ocrset/. /data/local/tmp/ocrbench/ > /dev/null
+            adb shell chmod -R a+r /data/local/tmp/ocrbench
+            adb shell "run-as app.carnet sh -c 'mkdir -p files/ocrbench/in && cp /data/local/tmp/ocrbench/* files/ocrbench/in/'"
+            adb shell "run-as app.carnet ls files/ocrbench/in | wc -l"
+            for v in default auto contrast all; do adb shell am instrument -w -e class app.carnet.OcrBench -e variant $v app.carnet.test/androidx.test.runner.AndroidJUnitRunner | tail -3; adb exec-out run-as app.carnet cat files/ocrbench/out-$v.json > out-$v.json; done
       - name: Score
         if: always()
         run: python tools/ocr/score.py ocrset out-*.json | tee -a $GITHUB_STEP_SUMMARY

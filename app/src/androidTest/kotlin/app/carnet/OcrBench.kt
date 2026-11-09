@@ -12,7 +12,7 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * OCR benchmark on a device/emulator: reads every image in <app files>/ocrbench/in with the app's
+ * OCR benchmark on a device/emulator: reads every image in <app files>/ocrbench/in (internal app storage) with the app's
  * real recognizer (ML Kit, same code as the Scan screen) and writes the recognized lines and timing
  * to ocrbench/out.json. Scored on the host against the ground truth (tools/ocr/score.py).
  * Argument "variant" selects preprocessing to compare.
@@ -24,7 +24,7 @@ class OcrBench {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val args = InstrumentationRegistry.getArguments()
         val variant = args.getString("variant") ?: "default"
-        val dir = File(ctx.getExternalFilesDir(null), "ocrbench")
+        val dir = File(ctx.filesDir, "ocrbench")
         val files = File(dir, "in").listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png") }?.sortedBy { it.name } ?: emptyList()
         val out = JSONArray()
         val scanner = ctx.app.scanner
