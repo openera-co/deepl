@@ -85,7 +85,8 @@ object Fidelity {
         var ok = 0; val bad = ArrayList<String>()
         for (s in spans) {
             val text = (s["text"] as String).trim().trimEnd(':').trim()
-            val expected = FakeTranslator.sentence(text)
+            // English drops the French space before : ; ! ? (TextTranslator.postProcess).
+            val expected = FakeTranslator.sentence(text).replace(Regex("\\s+([:;!?%])"), "$1")
             if (hasFormat(expected, s["fmt"] as String)) ok++ else bad.add("${s["fmt"]}:$expected")
         }
         checks += Check("formatting kept on spans", bad.isEmpty(), "$ok/${spans.size} ${bad.take(3)}")

@@ -26,7 +26,11 @@ class DocxTranslator : ZoneDocumentTranslator() {
                 val doc = Xml.parse(pkg[name]!!)
                 docs[name] = doc
                 stats.parts++
-                for (p in Xml.all(doc, W, "p")) collectParagraph(p, sink, stats)
+                for (p in Xml.all(doc, W, "p")) {
+                    val before = sink.size
+                    collectParagraph(p, sink, stats)
+                    if (options.bilingual && name == "word/document.xml" && sink.size > before && !insideTable(p)) bilingual.add(p to p.cloneNode(true) as Element)
+                }
             } else if (drawingPart) {
                 val doc = Xml.parse(pkg[name]!!)
                 docs[name] = doc
@@ -36,6 +40,12 @@ class DocxTranslator : ZoneDocumentTranslator() {
         }
         val styles = pkg["word/styles.xml"]?.let { Xml.parse(it) }
         return {
+            for ((translated, original) in bilingual) {
+                // Original first, in grey; the translation follows with its own formatting.
+                val rs = original.getElementsByTagNameNS(W, "r")
+                for (k in 0 until rs.length) greyRun(rs.item(k) as Element)
+                translated.parentNode.insertBefore(original, translated)
+            }
             for ((name, doc) in docs) {
                 setLanguage(doc, options.targetLanguage)
                 pkg[name] = Xml.serialize(doc)
@@ -43,6 +53,27 @@ class DocxTranslator : ZoneDocumentTranslator() {
             if (styles != null) { setLanguage(styles, options.targetLanguage); pkg["word/styles.xml"] = Xml.serialize(styles) }
             pkg["docProps/core.xml"]?.let { pkg["docProps/core.xml"] = setCoreLanguage(it, options.targetLanguage) }
         }
+    }
+
+    private val bilingual = ArrayList<Pair<Element, Element>>()
+
+    private fun insideTable(e: Element): Boolean {
+        var n = e.parentNode
+        while (n != null) { if (n is Element && n.localName == "tc") return true; n = n.parentNode }
+        return false
+    }
+
+    private fun isDescendant(e: org.w3c.dom.Node, root: Element): Boolean {
+        var n: org.w3c.dom.Node? = e
+        while (n != null) { if (n === root) return true; n = n.parentNode }
+        return false
+    }
+
+    private fun greyRun(r: Element) {
+        val doc = r.ownerDocument
+        val rPr = Xml.child(r, W, "rPr") ?: doc.createElementNS(W, "w:rPr").also { r.insertBefore(it, r.firstChild) }
+        Xml.child(rPr, W, "color")?.let { rPr.removeChild(it) }
+        val c = doc.createElementNS(W, "w:color"); c.setAttributeNS(W, "w:val", "6B6F78"); rPr.appendChild(c)
     }
 
     private class TextRun(val el: Element, val format: String, val text: String)

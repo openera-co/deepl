@@ -38,3 +38,9 @@ val bench by tasks.registering(JavaExec::class) {
     maxHeapSize = "6g"
     args = (project.findProperty("benchArgs") as String? ?: "").split(" ").filter { it.isNotBlank() }
 }
+
+val dbg by tasks.registering(JavaExec::class) {
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("app.carnet.core.dbg.DbgKt")
+    args = (project.findProperty("dbgArgs") as String? ?: "").split(" ").filter { it.isNotBlank() }
+}

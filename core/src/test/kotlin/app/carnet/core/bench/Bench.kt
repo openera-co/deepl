@@ -20,6 +20,7 @@ fun main(args: Array<String>) {
     when (args.getOrNull(0)) {
         "fidelity" -> fidelity(args.drop(1))
         "mt" -> mt(args.drop(1))
+        "convert" -> convert(args.drop(1))
         else -> error("usage: fidelity|mt …")
     }
 }
@@ -39,6 +40,27 @@ private fun mt(a: List<String>) {
     val sec = (System.nanoTime() - t0) / 1e9
     File(a[2]).writeText(out.joinToString("\n") + "\n")
     println("translated ${src.size} lines in ${"%.1f".format(sec)} s → ${"%.1f".format(src.size / sec)} lines/s, ${"%.0f".format(src.sumOf { it.length } / sec)} chars/s")
+}
+
+private fun convert(a: List<String>) {
+    val corpus = File(a[0]); val outDir = File(a[1]).also { it.mkdirs() }
+    val limit = a.getOrNull(2)?.toInt() ?: Int.MAX_VALUE
+    val types = a.getOrNull(3)?.split(",") ?: listOf("docx", "odt", "pptx", "xlsx", "md", "csv", "txt", "pdf")
+    val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+    val files = types.flatMap { t -> (File(corpus, t).listFiles { f -> f.extension == t }?.sortedBy { it.name } ?: emptyList()).take(limit) }
+    val res = files.map { f -> pool.submit<Triple<File, Long, Any>> { try { val (ms, c) = ConvertBench.run(f, File(outDir, f.extension).also { it.mkdirs() }); Triple(f, ms, c) } catch (e: Throwable) { Triple(f, 0L, e.toString() + " @ " + e.stackTrace.take(4).joinToString(" < ")) } } }.map { it.get() }
+    pool.shutdown()
+    val sb = StringBuilder()
+    for ((t, rs) in res.groupBy { it.first.extension }.toSortedMap()) {
+        val crashes = rs.filter { it.third is String }
+        @Suppress("UNCHECKED_CAST") val fails = rs.filter { it.third is List<*> && (it.third as List<Check>).any { c -> !c.ok } }
+        val ms = rs.map { it.second }.sorted()
+        sb.append("$t: ${rs.size} files, ${rs.size - crashes.size - fails.size} ok, ${crashes.size} crashed, median ${ms[ms.size / 2]} ms\n")
+        @Suppress("UNCHECKED_CAST") fails.flatMap { r -> (r.third as List<Check>).filter { !it.ok }.map { it.name to "${r.first.name}: ${it.detail}" } }.groupBy({ it.first }, { it.second })
+            .forEach { (n, ex) -> sb.append("   ✗ $n: ${ex.size} e.g. ${ex.take(3)}\n") }
+        crashes.take(3).forEach { sb.append("   ! ${it.first.name}: ${it.third}\n") }
+    }
+    println(sb); File(outDir, "summary.txt").writeText(sb.toString())
 }
 
 private fun fidelity(a: List<String>) {

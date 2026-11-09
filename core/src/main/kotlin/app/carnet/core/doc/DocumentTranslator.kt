@@ -24,6 +24,8 @@ data class TranslateOptions(
     val targetLanguage: String = "en-GB",
     val translateComments: Boolean = true,
     val translateNotes: Boolean = true,
+    /** Word/ODT: keep each original paragraph (in grey) above its translation, for revision. */
+    val bilingual: Boolean = false,
 )
 
 data class DocStats(var paragraphs: Int = 0, var translated: Int = 0, var characters: Int = 0, var parts: Int = 0)
