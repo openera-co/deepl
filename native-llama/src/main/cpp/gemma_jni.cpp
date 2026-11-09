@@ -29,7 +29,7 @@ JNI(jlong, gemmaInit)(JNIEnv * env, jclass, jstring jmodel, jstring jmmproj, jin
     g->n_ctx = ctxSize;
     const char * mp = env->GetStringUTFChars(jmodel, nullptr);
     llama_model_params mparams = llama_model_default_params();
-    mparams.use_mmap = true;
+    mparams.load_mode = LLAMA_LOAD_MODE_MMAP;
     g->model = llama_model_load_from_file(mp, mparams);
     env->ReleaseStringUTFChars(jmodel, mp);
     if (!g->model) { delete g; return 0; }
