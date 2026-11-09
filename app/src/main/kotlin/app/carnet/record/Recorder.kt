@@ -74,6 +74,8 @@ object Recorder {
     private var segStart = 0L
     private var failures = 0
     private lateinit var appCtx: Context
+    /** Spoken language: English only when the user chose English → French; school dictation is French otherwise. */
+    @Volatile var lang = "fr"; private set
     private const val RATE = 16000
 
     fun available(c: Context): Boolean = SpeechRecognizer.isRecognitionAvailable(c) ||
@@ -83,6 +85,7 @@ object Recorder {
     fun start(c: Context, title: String) {
         if (_state.value.recording) return
         appCtx = c.applicationContext
+        lang = if (appCtx.app.engine.direction == "en-fr") "en" else "fr"
         failures = 0
         val id = appCtx.app.library.newId()
         val dir = appCtx.app.library.dir(id)
@@ -127,7 +130,7 @@ object Recorder {
 
     private fun intent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fr-FR")
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (lang == "en") "en-GB" else "fr-FR")
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
@@ -202,11 +205,11 @@ object Recorder {
         if (raw.isEmpty()) { _state.value = _state.value.copy(partial = ""); return }
         appCtx.app.scope.launch {
             val punct = appCtx.app.settings.flow.first().spokenPunctuation
-            val fr = Dictation.format(raw, punct)
+            val fr = if (lang == "fr") Dictation.format(raw, punct) else raw.replaceFirstChar { it.uppercase() }.let { if (it.last() in ".!?") it else "$it." }
             val st = _state.value
             val idx = st.segments.size
             _state.value = st.copy(segments = st.segments + Segment(segStart, fr), partial = "")
-            val en = runCatching { appCtx.app.engine.translate(fr) }.getOrNull()
+            val en = runCatching { appCtx.app.engine.translate(fr, if (lang == "en") "en-fr" else "fr-en") }.getOrNull()
             val cur = _state.value
             if (idx < cur.segments.size) _state.value = cur.copy(segments = cur.segments.toMutableList().also { it[idx] = it[idx].copy(english = en) })
         }

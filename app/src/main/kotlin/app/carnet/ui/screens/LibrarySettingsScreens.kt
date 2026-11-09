@@ -129,8 +129,13 @@ fun SettingsScreen(nav: NavHostController, s: AppSettings) {
     Screen {
         TopBar("Settings", onBack = { nav.popBackStack() })
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).navigationBarsPadding()) {
+            UpdateBanner(Modifier.padding(top = 8.dp))
             SectionLabel("Translation")
             Card {
+                SettingRow("Languages", chevron = false) {
+                    Segmented(listOf("Auto", "FR→EN", "EN→FR"), when (s.direction) { "fr-en" -> 1; "en-fr" -> 2; else -> 0 }, Modifier.width(230.dp)) { i -> set { it.copy(direction = listOf("auto", "fr-en", "en-fr")[i]) } }
+                }
+                Divider()
                 SettingRow("Glossary", "${s.glossary.size}", onClick = { nav.navigate("glossary") })
                 Divider()
                 SettingRow("Spelling", chevron = false) { Segmented(listOf("UK", "US"), if (s.spelling == "US") 1 else 0, Modifier.width(120.dp)) { i -> set { it.copy(spelling = if (i == 1) "US" else "UK") } } }
@@ -151,7 +156,7 @@ fun SettingsScreen(nav: NavHostController, s: AppSettings) {
             }
             SectionLabel("Models")
             Card {
-                SettingRow("Models", formatSize(ctx.app.models.installedBytes() + (105L shl 20)), onClick = { nav.navigate("models") })
+                SettingRow("Models", formatSize(ctx.app.models.installedBytes()), onClick = { nav.navigate("models") })
                 Divider()
                 SettingRow("Share with another phone", onClick = { nav.navigate("share") })
                 Divider()
@@ -180,7 +185,20 @@ fun SettingsScreen(nav: NavHostController, s: AppSettings) {
                     }
                 }
             }
-            Text("Carnet ${ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName}", style = Type.small, color = pal.muted, modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp).wrapCenter())
+            SectionLabel("App")
+            Card {
+                val up by ctx.app.updater.state.collectAsState()
+                SettingRow("Version", ctx.app.updater.currentVersion, chevron = false)
+                Divider()
+                SettingRow("Check for updates", when (val u = up) {
+                    app.carnet.update.UpdateState.Checking -> "Checking…"
+                    app.carnet.update.UpdateState.UpToDate -> "Up to date"
+                    is app.carnet.update.UpdateState.Available -> "${u.info.versionName} available"
+                    is app.carnet.update.UpdateState.Failed -> u.message
+                    else -> null
+                }, chevron = false, onClick = { ctx.app.updater.check(force = true) })
+            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
@@ -205,27 +223,36 @@ fun ModelsScreen(nav: NavHostController, s: AppSettings) {
     Screen {
         TopBar("Models", onBack = { nav.popBackStack() })
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
-            val used = ctx.app.models.installedBytes() + (109L shl 20)
+            val used = ctx.app.models.installedBytes()
             val free = ctx.filesDir.usableSpace
+            val catalog by ctx.app.models.catalogFlow.collectAsState()
+            LaunchedEffect(Unit) { ctx.app.models.refreshCatalog() }
+            GetTranslationCard(onShare = { nav.navigate("share") })
+            Spacer(Modifier.height(12.dp))
             Card(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                 Row { Text("Storage", style = Type.bodyStrong, color = pal.ink, modifier = Modifier.weight(1f)); Text("${formatSize(used)} used · ${formatSize(free)} free", style = Type.small, color = pal.muted) }
                 Spacer(Modifier.height(10.dp))
                 app.carnet.ui.ProgressBar(used.toFloat() / (used + free).coerceAtLeast(1), height = 8.dp, track = pal.surfaceAlt)
             }
-            SectionLabel("Built in")
+            val get = rememberStartDownload {}
+            SectionLabel("Translation")
             Card {
-                ctx.app.models.catalog.filter { it.builtIn }.forEachIndexed { i, m ->
+                val tr = catalog.filter { it.isTranslation }
+                if (tr.isEmpty()) SettingRow("Connect to the internet to see the models", chevron = false)
+                tr.forEachIndexed { i, m ->
                     if (i > 0) Divider()
-                    ModelRow(m.title, formatSize(m.size), ModelStatus.Installed, onGet = {}, onPause = {})
+                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { get(); ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) })
                 }
             }
-            SectionLabel("Downloads")
+            SectionLabel("Built in")
+            Card { ModelRow("Printed text", "Included", ModelStatus.Installed, onGet = {}, onPause = {}) }
+            SectionLabel("More")
             Card {
-                val optional = ctx.app.models.catalog.filter { !it.builtIn && ctx.app.models.supported(it.id) }
+                val optional = catalog.filter { !it.isTranslation && ctx.app.models.supported(it.id) }
                 if (optional.isEmpty()) SettingRow("No optional models for this phone", chevron = false)
                 optional.forEachIndexed { i, m ->
                     if (i > 0) Divider()
-                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) })
+                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { get(); ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) })
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -311,7 +338,7 @@ fun ShareModelsScreen(nav: NavHostController) {
         Segmented(listOf("Send", "Receive"), mode, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) { mode = it; if (it == 0) remote = null }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (mode == 0) {
-                val installed = ctx.app.models.catalog.filter { !it.builtIn && status[it.id] is ModelStatus.Installed }
+                val installed = ctx.app.models.catalog.filter { status[it.id] is ModelStatus.Installed }
                 if (installed.isEmpty()) EmptyState(Ic.Model, "No downloaded models to share")
                 else if (!server.running) {
                     Card { installed.forEachIndexed { i, m -> if (i > 0) Divider(); SettingRow(m.title, formatSize(m.size), chevron = false) } }
@@ -351,7 +378,7 @@ fun ShareModelsScreen(nav: NavHostController) {
                         if (remote!!.isEmpty()) SettingRow("The other phone has no models to share", chevron = false)
                         remote!!.forEachIndexed { i, m ->
                             if (i > 0) Divider()
-                            ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { ctx.app.models.download(m.id, r.base, r.token) }, onPause = { ctx.app.models.pause(m.id) })
+                            ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { m.spec?.let { sp -> ctx.app.models.adopt(sp) }; ctx.app.models.download(m.id, r.base, r.token) }, onPause = { ctx.app.models.pause(m.id) })
                         }
                     }
                 }

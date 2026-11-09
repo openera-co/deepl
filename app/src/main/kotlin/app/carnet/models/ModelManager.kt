@@ -1,17 +1,23 @@
 package app.carnet.models
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Uri
 import app.carnet.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -24,28 +30,56 @@ data class ModelSpec(
     val title: String,
     val purpose: String,
     val files: List<ModelFile>,
-    val builtIn: Boolean = false,
-    val builtInSize: Long = 0,
+    /** "fr-en" / "en-fr" for translation models, null for others. */
+    val direction: String? = null,
+    /** "best" or "fast" for translation models. */
+    val quality: String? = null,
+    /** Part of the one-button "get everything you need" download. */
+    val recommended: Boolean = false,
 ) {
-    val size: Long get() = if (builtIn) builtInSize else files.sumOf { it.size }
+    val size: Long get() = files.sumOf { it.size }
+    val isTranslation get() = direction != null
+
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("title", title).put("purpose", purpose)
+        .put("direction", direction ?: JSONObject.NULL).put("quality", quality ?: JSONObject.NULL).put("recommended", recommended)
+        .put("files", JSONArray(files.map { JSONObject().put("name", it.name).put("url", it.url).put("size", it.size).put("sha256", it.sha256) }))
+
+    companion object {
+        fun fromJson(o: JSONObject): ModelSpec {
+            val fs = o.getJSONArray("files")
+            return ModelSpec(
+                o.getString("id"), o.getString("title"), o.optString("purpose"),
+                (0 until fs.length()).map { fs.getJSONObject(it).let { f -> ModelFile(f.getString("name"), f.optString("url"), f.getLong("size"), f.getString("sha256")) } },
+                o.optString("direction").takeIf { it.isNotEmpty() && it != "null" },
+                o.optString("quality").takeIf { it.isNotEmpty() && it != "null" },
+                o.optBoolean("recommended"),
+            )
+        }
+    }
 }
 
 sealed class ModelStatus {
     object NotInstalled : ModelStatus()
-    data class Downloading(val done: Long, val total: Long, val paused: Boolean = false) : ModelStatus()
+    /** [speed] in bytes per second (0 while connecting); [waiting] explains a pause the user didn't ask for. */
+    data class Downloading(val done: Long, val total: Long, val paused: Boolean = false, val speed: Long = 0, val waiting: String? = null) : ModelStatus()
     object Verifying : ModelStatus()
     object Installed : ModelStatus()
     data class Failed(val reason: String) : ModelStatus()
 }
 
 /**
- * Optional on-device models: download (resumable, checksummed), import from a file,
- * and export/share with other phones (see ShareServer).
+ * On-device models: one-button download (resumable, checksummed, retried, kept alive in the
+ * background by [DownloadService]), import from a file, and sharing with other phones (ShareServer).
+ * The translation models' catalog (models.json) comes from the app's GitHub release "models-v1";
+ * a copy is bundled at build time so the app knows the files even offline (e.g. to receive them
+ * from another phone).
  */
 class ModelManager(private val context: Context) {
-    val catalog = listOf(
-        ModelSpec("translate", "Translation", "French → English", emptyList(), builtIn = true, builtInSize = 105L shl 20),
-        ModelSpec("ocr", "Printed text", "Reading photos", emptyList(), builtIn = true, builtInSize = 4L shl 20),
+    private val root = File(context.filesDir, "models").apply { mkdirs() }
+    private val cachedCatalog = File(root, "catalog.json")
+
+    /** Models that are not translation models (fixed URLs). */
+    private val extras = listOf(
         ModelSpec("handwriting", "Handwriting & Improve", "TranslateGemma 4B", listOf(
             ModelFile("model.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf", 2489909760, "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"),
             ModelFile("vision.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.mmproj-Q8_0.gguf", 591377600, "482f68be8823dfdfb3561c22cdd1c0f617d0d5e6efe9c323cc6428a4331dba01"),
@@ -58,12 +92,44 @@ class ModelManager(private val context: Context) {
         )),
     )
 
-    private val root = File(context.filesDir, "models").apply { mkdirs() }
+    private val _catalog = MutableStateFlow(loadCatalog())
+    val catalogFlow: StateFlow<List<ModelSpec>> = _catalog
+    val catalog: List<ModelSpec> get() = _catalog.value
+
     private val _status = MutableStateFlow(catalog.associate { it.id to initialStatus(it) })
     val status: StateFlow<Map<String, ModelStatus>> = _status
     private val jobs = HashMap<String, Job>()
+    /** Downloads run one at a time (full bandwidth for the first model, so it becomes usable sooner). */
+    private val queue = Mutex()
+
+    private fun loadCatalog(): List<ModelSpec> {
+        val text = runCatching { cachedCatalog.readText() }.getOrNull()
+            ?: runCatching { context.assets.open("models.json").use { String(it.readBytes()) } }.getOrNull()
+        val translation = text?.let { parseCatalog(it) } ?: emptyList()
+        // Models adopted from another phone that aren't in the catalog (e.g. a newer version).
+        val adopted = root.listFiles()?.mapNotNull { d -> File(d, "spec.json").takeIf { it.exists() }?.let { runCatching { ModelSpec.fromJson(JSONObject(it.readText())) }.getOrNull() } }
+            ?.filter { a -> translation.none { it.id == a.id } && extras.none { it.id == a.id } } ?: emptyList()
+        return translation + adopted + extras
+    }
+
+    private fun parseCatalog(text: String): List<ModelSpec>? = runCatching {
+        val a = JSONObject(text).getJSONArray("models")
+        (0 until a.length()).map { ModelSpec.fromJson(a.getJSONObject(it)) }
+    }.getOrNull()
+
+    /** Fetches the latest catalog (new or improved models). Keeps the old one when offline. */
+    suspend fun refreshCatalog() = withContext(Dispatchers.IO) {
+        runCatching {
+            val text = httpText(CATALOG_URL)
+            if (parseCatalog(text).isNullOrEmpty()) return@runCatching
+            cachedCatalog.writeText(text)
+            _catalog.value = loadCatalog()
+            _status.value = catalog.associate { it.id to (_status.value[it.id]?.takeIf { s -> s !is ModelStatus.NotInstalled } ?: initialStatus(it)) }
+        }
+    }
 
     fun spec(id: String) = catalog.first { it.id == id }
+    fun specOrNull(id: String) = catalog.firstOrNull { it.id == id }
 
     /** Optional models need their native engine in this build and a compatible CPU. */
     fun supported(id: String): Boolean = when {
@@ -75,11 +141,22 @@ class ModelManager(private val context: Context) {
     fun file(id: String, name: String) = File(dir(id), name)
     fun isInstalled(id: String) = _status.value[id] is ModelStatus.Installed
 
+    /** The installed translation model for a direction ("fr-en"/"en-fr"), best quality first unless [preferFast]. */
+    fun translationModel(direction: String, preferFast: Boolean = false): ModelSpec? {
+        val installed = catalog.filter { it.direction == direction && isInstalled(it.id) }
+        return installed.sortedBy { if ((it.quality == "fast") == preferFast) 0 else 1 }.firstOrNull()
+    }
+
+    /** What the one button downloads: the recommended models not yet installed. */
+    fun recommendedMissing(): List<ModelSpec> = catalog.filter { it.recommended && !isInstalled(it.id) && supported(it.id) }
+
+    private fun installedOk(s: ModelSpec) = s.files.isNotEmpty() && File(dir(s.id), ".ok").exists() &&
+        s.files.all { File(dir(s.id), it.name).let { f -> f.exists() && f.length() == it.size } }
+
     private fun initialStatus(s: ModelSpec): ModelStatus = when {
-        s.builtIn -> ModelStatus.Installed
-        s.files.all { File(File(root, s.id), it.name).let { f -> f.exists() && f.length() == it.size } } && File(File(root, s.id), ".ok").exists() -> ModelStatus.Installed
-        s.files.any { File(File(root, s.id), it.name + ".part").exists() } ->
-            ModelStatus.Downloading(s.files.sumOf { File(File(root, s.id), it.name + ".part").length() + File(File(root, s.id), it.name).let { f -> if (f.exists()) f.length() else 0 } }, s.size, paused = true)
+        installedOk(s) -> ModelStatus.Installed
+        s.files.any { File(dir(s.id), it.name + ".part").exists() } ->
+            ModelStatus.Downloading(s.files.sumOf { f -> File(dir(s.id), f.name).takeIf { it.exists() && it.length() == f.size }?.length() ?: File(dir(s.id), f.name + ".part").length() }, s.size, paused = true)
         else -> ModelStatus.NotInstalled
     }
 
@@ -87,28 +164,23 @@ class ModelManager(private val context: Context) {
 
     fun installedBytes(): Long = root.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
-    /** Downloads (or resumes) all files of a model from its origin. */
+    val anyDownloading: Boolean get() = _status.value.values.any { it is ModelStatus.Downloading && !it.paused || it is ModelStatus.Verifying }
+
+    /** One button: downloads every recommended model (translation both ways). */
+    fun downloadRecommended() { recommendedMissing().forEach { download(it.id) } }
+
+    /**
+     * Downloads (or resumes) all files of a model, from its origin or from another phone ([baseUrl]).
+     * Network drops are retried with back-off; the download continues in the background.
+     */
     fun download(id: String, baseUrl: String? = null, token: String? = null) {
         if (jobs[id]?.isActive == true) return
-        val spec = spec(id)
+        val spec = specOrNull(id) ?: return
+        set(id, ModelStatus.Downloading(currentBytes(spec), spec.size, waiting = "Waiting…"))
+        DownloadService.start(context)
         jobs[id] = context.app.scope.launch(Dispatchers.IO) {
             try {
-                val d = dir(id).apply { mkdirs() }
-                var done = spec.files.sumOf { f -> File(d, f.name).takeIf { it.exists() && it.length() == f.size }?.length() ?: File(d, f.name + ".part").length() }
-                set(id, ModelStatus.Downloading(done, spec.size))
-                for (f in spec.files) {
-                    val target = File(d, f.name)
-                    if (target.exists() && target.length() == f.size) continue
-                    val part = File(d, f.name + ".part")
-                    val url = if (baseUrl != null) "$baseUrl/file/$id/${f.name}" else f.url
-                    val job = coroutineContext[Job]
-                    fetch(url, part, token, { job?.isActive != false }) { n -> done += n; set(id, ModelStatus.Downloading(done, spec.size)) }
-                    set(id, ModelStatus.Verifying)
-                    if (sha256(part) != f.sha256) { part.delete(); throw IllegalStateException("Checksum mismatch for ${f.name} — download it again") }
-                    part.renameTo(target)
-                }
-                File(d, ".ok").writeText("ok")
-                set(id, ModelStatus.Installed)
+                queue.withLock { runDownload(spec, baseUrl, token) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 set(id, (initialStatus(spec) as? ModelStatus.Downloading)?.copy(paused = true) ?: ModelStatus.NotInstalled)
             } catch (e: Throwable) {
@@ -117,12 +189,76 @@ class ModelManager(private val context: Context) {
         }
     }
 
+    private fun currentBytes(spec: ModelSpec) = spec.files.sumOf { f -> File(dir(spec.id), f.name).takeIf { it.exists() && it.length() == f.size }?.length() ?: File(dir(spec.id), f.name + ".part").length() }
+
+    private suspend fun runDownload(spec: ModelSpec, baseUrl: String?, token: String?) {
+        val id = spec.id
+        val d = dir(id).apply { mkdirs() }
+        File(d, "spec.json").writeText(spec.toJson().toString())
+        var done = currentBytes(spec)
+        val meter = SpeedMeter()
+        for (f in spec.files) {
+            val target = File(d, f.name)
+            if (target.exists() && target.length() == f.size) continue
+            val part = File(d, f.name + ".part")
+            val url = if (baseUrl != null) "$baseUrl/file/$id/${f.name}" else f.url
+            var attempt = 0
+            while (true) {
+                if (baseUrl == null) awaitAllowedNetwork(id, done, spec.size)
+                try {
+                    set(id, ModelStatus.Downloading(done, spec.size, speed = 0))
+                    val job = kotlin.coroutines.coroutineContext[Job]
+                    fetch(url, part, token, { job?.isActive != false }) { n ->
+                        done += n
+                        set(id, ModelStatus.Downloading(done, spec.size, speed = meter.add(n)))
+                    }
+                    break
+                } catch (e: IOException) {
+                    // Lost connection: wait and resume from where it stopped.
+                    if (++attempt > 8) throw IOException("Connection lost — tap to resume")
+                    done = currentBytes(spec)
+                    val wait = minOf(60, 2 shl minOf(attempt, 5))
+                    for (s in wait downTo 1) { set(id, ModelStatus.Downloading(done, spec.size, waiting = "Reconnecting in ${s}s")); delay(1000) }
+                }
+            }
+            set(id, ModelStatus.Verifying)
+            if (sha256(part) != f.sha256) { part.delete(); throw IllegalStateException("${f.name} was damaged in transfer — try again") }
+            part.renameTo(target)
+            done = currentBytes(spec)
+        }
+        File(d, ".ok").writeText("ok")
+        set(id, ModelStatus.Installed)
+    }
+
+    /** Respects "Wi-Fi only": waits (visibly) until the phone is on an unmetered network. */
+    private suspend fun awaitAllowedNetwork(id: String, done: Long, total: Long) {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        while (context.app.settings.flow.first().wifiOnly && cm.isActiveNetworkMetered) {
+            set(id, ModelStatus.Downloading(done, total, waiting = "Waiting for Wi-Fi"))
+            delay(3000)
+        }
+    }
+
     fun pause(id: String) { jobs[id]?.cancel() }
+    fun pauseAll() { jobs.values.forEach { it.cancel() } }
 
     fun delete(id: String) {
         jobs[id]?.cancel()
         dir(id).deleteRecursively()
         set(id, ModelStatus.NotInstalled)
+    }
+
+    private fun httpText(url: String): String {
+        var u = url
+        repeat(8) {
+            val c = URL(u).openConnection() as HttpURLConnection
+            c.instanceFollowRedirects = false; c.connectTimeout = 15000; c.readTimeout = 20000
+            val code = c.responseCode
+            if (code in 300..399) { u = URL(URL(u), c.getHeaderField("Location")).toString(); c.disconnect(); return@repeat }
+            if (code != 200) throw IOException("Server answered $code")
+            return c.inputStream.use { String(it.readBytes()) }
+        }
+        throw IOException("Too many redirects")
     }
 
     private fun fetch(url: String, part: File, token: String?, active: () -> Boolean, onBytes: (Long) -> Unit) {
@@ -137,9 +273,10 @@ class ModelManager(private val context: Context) {
             if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
             val code = c.responseCode
             if (code in 300..399 && redirects++ < 8) { u = URL(URL(u), c.getHeaderField("Location")).toString(); c.disconnect(); continue }
+            if (code == 416) return // already complete
             if (code != 200 && code != 206) throw IllegalStateException("Server answered $code")
             val append = code == 206
-            if (!append && have > 0) part.delete()
+            if (!append && have > 0) { onBytes(-have); part.delete() }
             c.inputStream.use { input -> java.io.FileOutputStream(part, append).use { out -> copyCounting(input, out, active, onBytes) } }
             return
         }
@@ -150,7 +287,6 @@ class ModelManager(private val context: Context) {
         var pending = 0L
         var last = System.currentTimeMillis()
         while (true) {
-            if (Thread.currentThread().isInterrupted) throw InterruptedException()
             val n = input.read(buf)
             if (n < 0) break
             out.write(buf, 0, n)
@@ -173,6 +309,7 @@ class ModelManager(private val context: Context) {
             if (match == null) { tmp.delete(); continue }
             val (spec, f) = match
             dir(spec.id).mkdirs()
+            File(dir(spec.id), "spec.json").writeText(spec.toJson().toString())
             tmp.copyTo(file(spec.id, f.name), true); tmp.delete()
             if (spec.files.all { file(spec.id, it.name).let { x -> x.exists() && x.length() == it.size } }) { File(dir(spec.id), ".ok").writeText("ok"); set(spec.id, ModelStatus.Installed) }
             imported.add(spec.title)
@@ -180,17 +317,36 @@ class ModelManager(private val context: Context) {
         imported
     }
 
-    /** Manifest served to other phones: installed models and their files. */
+    /** Makes a model offered by another phone known here (it may be newer than this phone's catalog). */
+    fun adopt(spec: ModelSpec) {
+        if (specOrNull(spec.id) != null) return
+        dir(spec.id).mkdirs()
+        File(dir(spec.id), "spec.json").writeText(spec.toJson().toString())
+        _catalog.value = loadCatalog()
+        set(spec.id, initialStatus(spec))
+    }
+
+    /** Manifest served to other phones: installed models with everything needed to install them. */
     fun manifest(): JSONObject {
         val arr = JSONArray()
-        for (s in catalog.filter { !it.builtIn && isInstalled(it.id) }) {
-            arr.put(JSONObject().put("id", s.id).put("title", s.title).put("size", s.size)
-                .put("files", JSONArray(s.files.map { JSONObject().put("name", it.name).put("size", it.size).put("sha256", it.sha256) })))
+        for (s in catalog.filter { isInstalled(it.id) }) arr.put(s.toJson())
+        return JSONObject().put("app", "carnet").put("version", 2).put("models", arr)
+    }
+
+    private class SpeedMeter {
+        private val window = ArrayDeque<Pair<Long, Long>>()
+        fun add(bytes: Long): Long {
+            val now = System.currentTimeMillis()
+            window.addLast(now to bytes)
+            while (window.size > 2 && now - window.first().first > 4000) window.removeFirst()
+            val span = (now - window.first().first).coerceAtLeast(250)
+            return window.sumOf { it.second } * 1000 / span
         }
-        return JSONObject().put("app", "carnet").put("version", 1).put("models", arr)
     }
 
     companion object {
+        const val CATALOG_URL = "https://github.com/openera-co/deepl/releases/download/models-v1/models.json"
+
         fun sha256(f: File): String {
             val md = MessageDigest.getInstance("SHA-256")
             f.inputStream().use { i -> val b = ByteArray(1 shl 16); while (true) { val n = i.read(b); if (n < 0) break; md.update(b, 0, n) } }

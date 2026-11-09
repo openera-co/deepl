@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,26 +21,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Cache translation model
-        id: model-cache
-        uses: actions/cache@v4
-        with:
-          path: build/model
-          key: model-opus-fr-en-${{ hashFiles('tools/export_model.py') }}
-
-      - name: Export FR→EN model (ONNX int8)
-        if: steps.model-cache.outputs.cache-hit != 'true'
+      - name: Bundle the model catalog (models are downloaded in the app)
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install "transformers<5" sentencepiece sacremoses onnx onnxruntime "optimum[onnxruntime]" accelerate
-          python tools/export_model.py Helsinki-NLP/opus-mt-fr-en build/model
-
-      - name: Install model into app assets
-        run: tools/install_model.sh build/model
+          mkdir -p app/src/main/assets
+          curl -sfL https://github.com/${{ github.repository }}/releases/download/models-v1/models.json -o app/src/main/assets/models.json || echo "no catalog yet"
 
       - name: Android SDK packages
         run: |
@@ -50,10 +37,28 @@ jobs:
         run: ./gradlew :core:test :app:testDebugUnitTest
 
       - name: Build release APK (with native engines)
-        run: ./gradlew :app:assembleRelease -Pcarnet.native=true
+        run: ./gradlew :app:assembleRelease -Pcarnet.native=true -Pcarnet.build=${{ github.run_number }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: Carnet-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # Every build on the app branch becomes the latest release; installed apps see update.json and offer it.
+      - name: Publish update
+        if: github.event_name == 'push'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          v="1.2.${{ github.run_number }}"
+          cp app/build/outputs/apk/release/app-release.apk Carnet.apk
+          size=$(stat -c %s Carnet.apk); sha=$(sha256sum Carnet.apk | cut -d' ' -f1)
+          notes=$(git log -1 --pretty=%s | head -c 300)
+          python3 - "$v" "$size" "$sha" "$notes" <<'PY'
+          import json, sys
+          v, size, sha, notes = sys.argv[1:5]
+          json.dump({"versionCode": 100 + int(v.split(".")[-1]), "versionName": v,
+                     "apk": f"https://github.com/${{ github.repository }}/releases/download/v{v}/Carnet.apk",
+                     "size": int(size), "sha256": sha, "notes": notes}, open("update.json", "w"))
+          PY
+          gh release create "v$v" Carnet.apk update.json --title "Carnet $v" --notes "$notes" --target ${{ github.sha }} --latest

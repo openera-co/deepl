@@ -74,7 +74,7 @@ class Jobs(private val context: Context) {
                 val src = File(dir, "source.$ext")
                 withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)!!.use { i -> src.outputStream().use { i.copyTo(it) } } }
                 val settings = context.app.settings.flow.first()
-                val target = if (settings.spelling == "US") "en-US" else "en-GB"
+                val sample = withContext(Dispatchers.IO) { DocSample.of(src) }
                 val englishName = name.substringBeforeLast('.')
                 fun progress(stage: String) = object : Progress {
                     override fun update(done: Int, total: Int) {
@@ -91,7 +91,7 @@ class Jobs(private val context: Context) {
                 when {
                     ext == "pdf" -> {
                         val out = File(dir, "result.pdf")
-                        val stats = context.app.engine.exclusive { tr ->
+                        val stats = context.app.engine.exclusive(sample) { tr ->
                             out.outputStream().use { PdfTranslator(AndroidFonts(context)).translate(src, it, tr, { cancel.get() }) { d, t -> progress("Translating").update(d, t) } }
                         }
                         if (stats.scanned) {
@@ -117,10 +117,10 @@ class Jobs(private val context: Context) {
                     else -> {
                         val fmt = DocFormat.fromName(src.name) ?: throw IllegalArgumentException("This file type isn't supported yet: .$ext")
                         val out = File(dir, "result.$ext")
-                        val stats = context.app.engine.exclusive { tr ->
+                        val stats = context.app.engine.exclusive(sample) { tr ->
                             out.outputStream().use { o ->
                                 src.inputStream().use { i ->
-                                    Documents.translate(src.name, i, o, tr, TranslateOptions(targetLanguage = target, bilingual = settings.bilingual), progress("Translating"))
+                                    Documents.translate(src.name, i, o, tr, TranslateOptions(targetLanguage = DocSample.targetTag(tr.target, settings.spelling), bilingual = settings.bilingual), progress("Translating"))
                                 }
                             }
                         }

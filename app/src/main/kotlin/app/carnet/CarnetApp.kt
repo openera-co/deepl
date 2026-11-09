@@ -11,6 +11,7 @@ import app.carnet.engine.Engine
 import app.carnet.jobs.Jobs
 import app.carnet.models.ModelManager
 import app.carnet.ocr.Scanner
+import app.carnet.update.Updater
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,7 @@ class CarnetApp : Application() {
     val scanner by lazy { Scanner(this, engine) }
     val jobs by lazy { Jobs(this) }
     val models by lazy { ModelManager(this) }
+    val updater by lazy { Updater(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +42,10 @@ class CarnetApp : Application() {
             val s = settings.flow.first()
             engine.start(s.glossary, s.spelling)
             // Keep the engine in sync with glossary/spelling edits.
+            launch { settings.flow.map { it.direction }.distinctUntilChanged().collect { engine.direction = it } }
+            // New models and app updates (silent when offline).
+            launch { models.refreshCatalog() }
+            updater.check()
             settings.flow.map { Triple(it.glossary, it.spelling, it.quality) }.distinctUntilChanged().collect { (g, sp, q) ->
                 engine.docBeam = if (q == "careful") 4 else 1
                 engine.setGlossary(g); engine.setSpelling(sp)
@@ -53,12 +59,16 @@ class CarnetApp : Application() {
         nm.createNotificationChannel(NotificationChannel(CH_WORK, "Translations", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_RECORD, "Recording", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_SHARE, "Model sharing", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CH_DOWNLOAD, "Downloads", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CH_UPDATE, "App updates", NotificationManager.IMPORTANCE_DEFAULT))
     }
 
     companion object {
         const val CH_WORK = "work"
         const val CH_RECORD = "record"
         const val CH_SHARE = "share"
+        const val CH_DOWNLOAD = "download"
+        const val CH_UPDATE = "update"
         lateinit var instance: CarnetApp
             private set
     }

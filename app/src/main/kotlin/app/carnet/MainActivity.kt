@@ -19,6 +19,8 @@ import app.carnet.ui.CarnetTheme
 sealed class Incoming {
     data class Text(val text: String) : Incoming()
     data class Files(val uris: List<Uri>) : Incoming()
+    /** A notification asked to open a screen ("models", "update"). */
+    data class Open(val route: String) : Incoming()
 }
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +45,7 @@ class MainActivity : ComponentActivity() {
     @Suppress("DEPRECATION")
     private fun handle(intent: Intent?) {
         intent ?: return
+        intent.getStringExtra("open")?.let { incoming.value = Incoming.Open(it); intent.removeExtra("open"); return }
         when (intent.action) {
             Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.let { incoming.value = Incoming.Text(it.toString()) }
             Intent.ACTION_SEND -> {

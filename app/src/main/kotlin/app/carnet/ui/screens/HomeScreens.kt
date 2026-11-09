@@ -101,11 +101,12 @@ fun SetupScreen(nav: NavHostController) {
             }
             Spacer(Modifier.height(18.dp))
             Text("Carnet", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = pal.ink)
-            Text("French → English", style = Type.body, color = pal.muted, fontSize = 16.sp)
+            Text("French ⇄ English", style = Type.body, color = pal.muted, fontSize = 16.sp)
         }
         Column(Modifier.padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            GetTranslationCard(onShare = { nav.navigate("share") })
             Card {
-                StatusRow("Translation", when (engine) { Engine.State.Ready -> "Ready"; Engine.State.Loading -> "Preparing…"; Engine.State.Failed -> "Error" }, engine == Engine.State.Ready)
+                StatusRow("Translation", when (engine) { Engine.State.Ready -> "Ready"; Engine.State.Loading -> "Preparing…"; Engine.State.Failed -> "Error"; Engine.State.NoModel -> "Not downloaded" }, engine == Engine.State.Ready)
                 Divider()
                 StatusRow("Printed text", "Ready", true)
                 for (id in listOf("handwriting", "whisper-small").filter { ctx.app.models.supported(it) }) {
@@ -205,12 +206,10 @@ fun HomeScreen(nav: NavHostController, settings: AppSettings) {
             IconBtn(Ic.Settings, "Settings") { nav.navigate("settings") }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            UpdateBanner()
+            GetTranslationCard(onShare = { nav.navigate("share") })
             Card {
-                Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("French", style = Type.bodyStrong, color = pal.ink, fontSize = 14.sp)
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { Icon(Ic.Arrow, null, tint = pal.muted, modifier = Modifier.size(18.dp)) }
-                    Text("English", style = Type.bodyStrong, color = pal.ink, fontSize = 14.sp)
-                }
+                DirectionBar(settings, ctx.app.engine.resolve(text, if (settings.direction == "auto") null else settings.direction), Modifier.padding(horizontal = 16.dp))
                 Divider()
                 Column(Modifier.padding(16.dp)) {
                     Box(Modifier.fillMaxWidth().heightIn(min = 120.dp)) {
@@ -278,9 +277,9 @@ fun shareText(ctx: Context, text: String) {
 // ------------------------------------------------------------------------------------------ Text translation
 
 @Composable
-fun TextScreen(nav: NavHostController) {
+fun TextScreen(nav: NavHostController, settings: AppSettings) {
     val ctx = LocalContext.current
-    val engine by ctx.app.engine.state.collectAsState()
+    val states by ctx.app.engine.states.collectAsState()
     var src by remember { mutableStateOf(Handoff.text) }
     var out by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -288,27 +287,27 @@ fun TextScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
     val tts = rememberTts()
+    val fixed = if (settings.direction == "auto") null else settings.direction
+    val dir = ctx.app.engine.resolve(src, fixed)
+    val engine = states[dir] ?: Engine.State.NoModel
     // Translate as you type (debounced); the model translates a sentence in ~0.1 s.
-    LaunchedEffect(src, engine) {
+    LaunchedEffect(src, dir, engine) {
         if (src.isBlank()) { out = ""; return@LaunchedEffect }
+        if (engine == Engine.State.NoModel) { out = ""; return@LaunchedEffect }
         delay(if (out.isEmpty()) 0 else 280)
         busy = true
-        out = runCatching { ctx.app.engine.translate(src) }.getOrElse { "⚠ ${it.message}" }
+        out = runCatching { ctx.app.engine.translate(src, dir) }.getOrElse { "⚠ ${it.message}" }
         busy = false
     }
     LaunchedEffect(Unit) { if (src.isEmpty()) focus.requestFocus() }
     Screen(Modifier.imePadding()) {
         TopBar(onBack = { nav.popBackStack() }, center = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("French", style = Type.bodyStrong, color = pal.ink); Spacer(Modifier.width(8.dp))
-                Icon(Ic.Arrow, null, tint = pal.muted, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp))
-                Text("English", style = Type.bodyStrong, color = pal.ink)
-            }
-        }, actions = { Spacer(Modifier.width(44.dp)) })
+            DirectionBar(settings, dir, Modifier.width(300.dp), compact = true)
+        }, actions = { Spacer(Modifier.width(8.dp)) })
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Card(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("FRENCH", style = Type.section, color = pal.muted, modifier = Modifier.weight(1f))
+                    Text(langName(dir.substringBefore('-')).uppercase(), style = Type.section, color = pal.muted, modifier = Modifier.weight(1f))
                     AnimatedVisibility(src.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) { IconBtn(Ic.Close, "Clear", tint = pal.muted, size = 36.dp) { src = ""; focus.requestFocus() } }
                 }
                 Box(Modifier.fillMaxWidth().heightIn(min = 90.dp)) {
@@ -316,10 +315,11 @@ fun TextScreen(nav: NavHostController) {
                     BasicTextField(src, { src = it }, textStyle = Type.input.copy(color = pal.ink), cursorBrush = SolidColor(pal.accent), modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp).focusRequester(focus))
                 }
             }
-            AnimatedVisibility(src.isNotBlank(), enter = expandVertically(tween(220)) + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            if (engine == Engine.State.NoModel && src.isNotBlank()) NeedsModelNote(dir) { nav.navigate("models") }
+            AnimatedVisibility(src.isNotBlank() && engine != Engine.State.NoModel, enter = expandVertically(tween(220)) + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(pal.accent).padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("ENGLISH", style = Type.section, color = pal.accentInk.copy(alpha = 0.75f), modifier = Modifier.weight(1f))
+                        Text(langName(dir.substringAfter('-')).uppercase(), style = Type.section, color = pal.accentInk.copy(alpha = 0.75f), modifier = Modifier.weight(1f))
                         if (busy || engine != Engine.State.Ready) app.carnet.ui.screens.Dots(pal.accentInk)
                     }
                     Spacer(Modifier.height(8.dp))
@@ -330,7 +330,7 @@ fun TextScreen(nav: NavHostController) {
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                        IconBtn(Ic.Listen, "Listen", tint = pal.accentInk) { tts.speak(out) }
+                        IconBtn(Ic.Listen, "Listen", tint = pal.accentInk) { tts.speak(out, dir.substringAfter('-')) }
                         IconBtn(Ic.Share, "Share", tint = pal.accentInk) { shareText(ctx, out) }
                         Spacer(Modifier.width(4.dp))
                         Box(Modifier.height(40.dp).clip(RoundedCornerShape(12.dp)).background(pal.accentInk).tap(haptic = true) {
@@ -367,9 +367,9 @@ suspend fun saveText(ctx: Context, fr: String, en: String) {
 class Tts(ctx: Context) {
     private var ready = false
     private val tts = TextToSpeech(ctx.applicationContext) { ready = it == TextToSpeech.SUCCESS }
-    fun speak(text: String) {
+    fun speak(text: String, lang: String = "en") {
         if (!ready) return
-        tts.language = Locale.UK
+        tts.language = if (lang == "fr") Locale.FRANCE else Locale.UK
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "carnet")
     }
     fun shutdown() = tts.shutdown()

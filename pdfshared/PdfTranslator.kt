@@ -429,7 +429,7 @@ class PdfTranslator(private val fonts: FontProvider) {
                 }
             }
             doc.documentInformation?.let { info -> info.title?.let { t -> if (Segmenter.isLinguistic(t)) info.title = translator.translate(t) } }
-            doc.documentCatalog.language = "en"
+            doc.documentCatalog.language = translator.target
             doc.save(output)
             return PdfStats(doc.numberOfPages, blocks.size, linguistic, false)
         }

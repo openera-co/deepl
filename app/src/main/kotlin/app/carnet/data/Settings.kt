@@ -26,6 +26,8 @@ data class AppSettings(
     val wifiOnly: Boolean = true,
     val quality: String = "fast",
     val glossary: List<GlossaryEntry> = DEFAULT_GLOSSARY,
+    /** "auto", "fr-en" or "en-fr". */
+    val direction: String = "auto",
 )
 
 val DEFAULT_GLOSSARY = listOf(
@@ -47,6 +49,7 @@ class Settings(private val context: Context) {
         val wifi = booleanPreferencesKey("wifi")
         val quality = stringPreferencesKey("quality")
         val glossary = stringPreferencesKey("glossary")
+        val direction = stringPreferencesKey("direction")
     }
 
     val flow: Flow<AppSettings> = context.store.data.map { p -> read(p) }
@@ -63,6 +66,7 @@ class Settings(private val context: Context) {
         wifiOnly = p[K.wifi] ?: true,
         quality = p[K.quality] ?: "fast",
         glossary = p[K.glossary]?.let { parseGlossary(it) } ?: DEFAULT_GLOSSARY,
+        direction = p[K.direction] ?: "auto",
     )
 
     suspend fun update(f: (AppSettings) -> AppSettings) {
@@ -71,6 +75,7 @@ class Settings(private val context: Context) {
             p[K.setup] = s.setupDone; p[K.theme] = s.theme; p[K.spelling] = s.spelling; p[K.saveAs] = s.saveAs
             p[K.bilingual] = s.bilingual; p[K.autoCapture] = s.autoCapture; p[K.punct] = s.spokenPunctuation
             p[K.improve] = s.improveAfterStop; p[K.wifi] = s.wifiOnly; p[K.quality] = s.quality
+            p[K.direction] = s.direction
             p[K.glossary] = JSONArray(s.glossary.map { JSONObject().put("s", it.source).put("t", it.target) }).toString()
         }
     }

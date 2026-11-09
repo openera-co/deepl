@@ -228,10 +228,10 @@ suspend fun runTool(
     if (translate) {
         report("Translating", 0, 1)
         val out = File(dir, "translated.${input.extension}")
-        ctx.app.engine.exclusive { tr ->
+        ctx.app.engine.exclusive(app.carnet.jobs.DocSample.of(input)) { tr ->
             val prog = object : Progress { override fun update(done: Int, total: Int) = report("Translating", done, total); override fun cancelled() = cancel.get() }
             if (input.extension.equals("pdf", true)) out.outputStream().use { PdfTranslator(AndroidFonts(ctx)).translate(input, it, tr, { cancel.get() }) { d, t -> prog.update(d, t) } }
-            else out.outputStream().use { o -> input.inputStream().use { i -> Documents.translate(input.name, i, o, tr, TranslateOptions(), prog) } }
+            else out.outputStream().use { o -> input.inputStream().use { i -> Documents.translate(input.name, i, o, tr, TranslateOptions(targetLanguage = app.carnet.jobs.DocSample.targetTag(tr.target, "UK")), prog) } }
         }
         input = out
     }

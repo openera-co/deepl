@@ -55,6 +55,7 @@ fun AppNav(settings: AppSettings, incoming: MutableState<Incoming?>) {
         when (val inc = incoming.value) {
             is Incoming.Text -> { Handoff.text = inc.text; nav.navigate("text") { launchSingleTop = true } }
             is Incoming.Files -> { Handoff.files = inc.uris; nav.navigate("document?auto=true") { launchSingleTop = true } }
+            is Incoming.Open -> if (settings.setupDone) nav.navigate(if (inc.route == "update") "settings" else inc.route) { launchSingleTop = true }
             null -> {}
         }
         incoming.value = null
@@ -77,7 +78,7 @@ fun AppNav(settings: AppSettings, incoming: MutableState<Incoming?>) {
     ) {
         composable("setup") { SetupScreen(nav) }
         composable("home") { HomeScreen(nav, settings) }
-        composable("text") { TextScreen(nav) }
+        composable("text") { TextScreen(nav, settings) }
         composable("scan", enterTransition = { scaleIn(tween(D), initialScale = 0.94f) + fadeIn(tween(D)) }, exitTransition = { fadeOut(tween(D)) },
             popExitTransition = { scaleOut(tween(D), targetScale = 0.94f) + fadeOut(tween(D)) }) { ScanScreen(nav, settings) }
         composable("scanResult/{id}", arguments = listOf(navArgument("id") { type = NavType.StringType })) { ScanResultScreen(nav, it.arguments!!.getString("id")!!) }

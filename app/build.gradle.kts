@@ -12,8 +12,10 @@ android {
         applicationId = "app.carnet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // CI passes the run number so every published build is newer than the previous one (in-app updates).
+        val build = (project.findProperty("carnet.build") as String?)?.toIntOrNull() ?: 0
+        versionCode = 100 + build
+        versionName = if (build > 0) "1.2.$build" else "1.2-dev"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -70,16 +72,8 @@ android {
     }
 }
 
-val modelDir = file("src/main/assets/models/opus-fr-en")
-tasks.register("checkModelAssets") {
-    doLast {
-        val need = listOf("encoder_model.int8.onnx", "decoder_model_merged.int8.onnx", "source.pieces", "target.pieces", "vocab.txt", "model.json")
-        val missing = need.filter { !File(modelDir, it).exists() }
-        if (missing.isNotEmpty()) throw GradleException(
-            "Translation model missing: $missing\nRun: python tools/export_model.py Helsinki-NLP/opus-mt-fr-en build/model && tools/install_model.sh build/model"
-        )
-    }
-}
+// Translation models are downloaded in the app (Models screen), not bundled: updates stay small.
+// The catalog (models.json) is bundled when available so the app knows the files even offline.
 // The PDF translator is shared with the desktop test harness; rewrite its PDFBox imports for Android.
 val genPdf = layout.buildDirectory.dir("generated/pdfshared")
 val generatePdfShared by tasks.registering(Copy::class) {
@@ -88,7 +82,7 @@ val generatePdfShared by tasks.registering(Copy::class) {
     filter { line: String -> line.replace("org.apache.pdfbox", "com.tom_roush.pdfbox") }
 }
 android.sourceSets["main"].kotlin.srcDir(genPdf)
-tasks.named("preBuild") { dependsOn("checkModelAssets", generatePdfShared) }
+tasks.named("preBuild") { dependsOn(generatePdfShared) }
 
 dependencies {
     implementation(project(":core"))
