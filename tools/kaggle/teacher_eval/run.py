@@ -2,7 +2,7 @@
 # (Candidate "teachers" to distil into the phone model.) Runs on 2x T4 (fp16, no bf16).
 import subprocess, time, urllib.request, json, gc
 def sh(c): print("+", c, flush=True); subprocess.run(c, shell=True, check=False)
-sh("pip install -q vllm==0.11.0 sacrebleu 2>&1 | tail -2")
+sh("pip install -q vllm==0.11.0 \"transformers>=4.56,<5\" sacrebleu 2>&1 | tail -2")
 RAW = "https://raw.githubusercontent.com/openera-co/deepl/claude/offline-translator-mobile-app-ea8rbh/tools/eval/data/"
 data = {n: urllib.request.urlopen(RAW + n).read().decode().splitlines() for n in ["news500.fr", "news500.en", "flores300.fr", "flores300.en"]}
 TESTS = [("news500", "fr", "en"), ("flores300", "fr", "en"), ("flores300", "en", "fr")]
@@ -19,7 +19,7 @@ def score(tag, test, sl, tl, hyp, dt):
 
 # 1) Baseline: the phone's "best" model (Opus-MT tc-big), same test sets, on GPU.
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-for sl, tl in [("fr", "en"), ("en", "fr")]:
+for sl, tl in []:  # baseline already measured in v2
     name = f"Helsinki-NLP/opus-mt-tc-big-{sl}-{tl}"
     tok = AutoTokenizer.from_pretrained(name); m = AutoModelForSeq2SeqLM.from_pretrained(name, torch_dtype=torch.float16).cuda().eval()
     for test, a, b in TESTS:

@@ -18,7 +18,9 @@ android {
         val build = (project.findProperty("carnet.build") as String?)?.toIntOrNull() ?: 0
         versionCode = 100 + build
         versionName = if (build > 0) "1.2.$build" else "1.2-dev"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // Phones are arm64; the OCR benchmark builds x86_64 for the CI emulator (-Pcarnet.abi=x86_64).
+        ndk { abiFilters += listOf((project.findProperty("carnet.abi") as String?) ?: "arm64-v8a") }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -128,6 +130,8 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.test:core-ktx:1.6.1")
