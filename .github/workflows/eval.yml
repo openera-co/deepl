@@ -1,0 +1,39 @@
+name: Translation eval
+
+# Runs candidate translation models on fixed French test sets and uploads the English output,
+# so quality (BLEU/chrF/COMET) and CPU speed can be compared outside the phone.
+on:
+  workflow_dispatch:
+    inputs:
+      gguf:
+        description: "GGUF model URL"
+        default: "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf"
+  push:
+    paths: [ "tools/eval/**", ".github/workflows/eval.yml" ]
+
+jobs:
+  translategemma:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build llama.cpp server
+        run: |
+          git clone --depth 1 --branch b12211 https://github.com/ggml-org/llama.cpp /tmp/llama
+          cmake -S /tmp/llama -B /tmp/llama/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DGGML_NATIVE=ON
+          cmake --build /tmp/llama/build --target llama-server -j 4
+      - name: Download model
+        run: curl -sL -o /tmp/model.gguf "${{ github.event.inputs.gguf || 'https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf' }}"
+      - name: Translate test sets
+        run: |
+          nproc; lscpu | grep "Model name"
+          /tmp/llama/build/bin/llama-server -m /tmp/model.gguf -t 4 -c 8192 -np 2 --port 8080 > /tmp/server.log 2>&1 &
+          for i in $(seq 1 120); do curl -s http://127.0.0.1:8080/health | grep -q ok && break; sleep 2; done
+          mkdir -p out
+          python3 tools/eval/gemma_translate.py tools/eval/data/news500.fr out/gemma.news500.en 2 | tee -a out/speed.txt
+          python3 tools/eval/gemma_translate.py tools/eval/data/flores300.fr out/gemma.flores300.en 2 | tee -a out/speed.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-translategemma
+          path: out/
