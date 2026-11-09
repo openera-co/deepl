@@ -7,6 +7,8 @@ plugins {
 android {
     namespace = "app.carnet"
     compileSdk = 35
+    // Needed so release builds strip debug symbols from native libraries.
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "app.carnet"
@@ -68,7 +70,8 @@ android {
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*",
             // Post-quantum crypto tables pulled in by PdfBox's BouncyCastle; never used.
             "org/bouncycastle/pqc/**", "org/bouncycastle/x509/**")
-        jniLibs.useLegacyPackaging = false
+        // Compressed native libraries: a much smaller download (updates), unpacked once at install.
+        jniLibs.useLegacyPackaging = true
     }
 }
 
