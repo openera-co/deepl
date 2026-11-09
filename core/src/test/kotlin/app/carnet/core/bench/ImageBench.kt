@@ -28,27 +28,38 @@ object ImageBench {
         @Suppress("UNCHECKED_CAST") val lines = (meta["lines"] as List<Map<String, Any?>>).map { l ->
             val bb = (l["bbox"] as List<Double>).map { it.toFloat() }
             val text = l["text"] as String
-            TextLine(0, bb[0], bb[1], bb[2], bb[3], text, (bb[3] - bb[1]) * 0.78f, runs = listOf(StyledRun(text, Style())))
+            TextLine(0, bb[0], bb[1], bb[2], bb[3], text, (bb[3] - bb[1]) * 0.98f, runs = listOf(StyledRun(text, Style())))
         }
         val img = ImageIO.read(src)
         val t0 = System.nanoTime()
-        val blocks = Layout.blocks(lines)
+        val blocks = Layout.blocks(lines, sizeTolerance = 0.3f)
         Layout.assignRoom(blocks, { img.height - 8f }, { img.width.toFloat() })
         val ling = blocks.filter { Segmenter.isLinguistic(it.text) }
         val en = tr.translateAll(ling.map { it.text })
         val map = HashMap<Block, String>(); ling.forEachIndexed { i, b -> map[b] = en[i] }
+        val w = img.width; val h = img.height
+        val px = img.getRGB(0, 0, w, h, null, 0, w)
+        val orig = px.copyOf()
+        val colours = HashMap<Block, Int>()
+        for (b in blocks) {
+            if (map[b] == null) continue
+            val bg = app.carnet.core.layout.Inpaint.background(orig, w, h, b.left.toInt() - 4, b.top.toInt() - 4, b.right.toInt() + 4, b.bottom.toInt() + 4)
+            colours[b] = app.carnet.core.layout.Inpaint.ink(orig, w, h, b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt(), bg)
+            for (l in b.lines) {
+                val pad = (l.height * 0.15f).toInt() + 1
+                val lbg = app.carnet.core.layout.Inpaint.background(orig, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad)
+                app.carnet.core.layout.Inpaint.eraseInk(px, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad, lbg, dilate = maxOf(2, (l.height / 12).toInt()))
+            }
+        }
+        img.setRGB(0, 0, w, h, px, 0, w)
         val g = img.createGraphics()
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
         val measurer = TextMeasurer { text, size, _ -> g.getFontMetrics(font.deriveFont(size)).stringWidth(text).toFloat() }
         val placedBoxes = ArrayList<Triple<Block, FloatArray, Float>>()
         for (b in blocks) {
             val text = map[b] ?: continue
-            val bg = Color(img.getRGB(b.left.toInt().coerceIn(0, img.width - 1).let { maxOf(0, it - 4) }, b.top.toInt().coerceIn(0, img.height - 1)))
-            g.color = bg
-            for (l in b.lines) { val pad = l.height * 0.12f; g.fillRect((l.left - pad).toInt(), (l.top - pad).toInt(), (l.width + 2 * pad).toInt(), (l.height + 2 * pad).toInt()) }
             val p = Layout.fit(b, text, measurer)
-            val lum = 0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue
-            g.color = if (lum > 128) Color(25, 25, 25) else Color(240, 240, 235)
+            g.color = Color(colours[b] ?: 0xFF111111.toInt(), true)
             g.font = font.deriveFont(p.fontSize)
             var minX = Float.MAX_VALUE; var maxX = 0f; var minY = Float.MAX_VALUE; var maxY = 0f
             for (pl in p.lines) for (s in pl.segments) {

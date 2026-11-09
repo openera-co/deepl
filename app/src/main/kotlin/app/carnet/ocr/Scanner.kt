@@ -13,6 +13,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import app.carnet.core.layout.Block
+import app.carnet.core.layout.Inpaint
 import app.carnet.core.layout.Layout
 import app.carnet.core.layout.Style
 import app.carnet.core.layout.TextLine
@@ -89,7 +90,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
         for (b in blocks) for (l in b.lines) {
             val r = l.boundingBox ?: continue
             val h = r.height().toFloat()
-            lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), l.text, h * 0.78f,
+            lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), l.text, h * 0.98f,
                 runs = listOf(app.carnet.core.layout.StyledRun(l.text, Style()))))
             angles.add(l.angle)
         }
@@ -100,7 +101,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
     suspend fun scan(bmp: Bitmap, onStage: (String) -> Unit = {}): ScanPage = withContext(Dispatchers.Default) {
         onStage("reading")
         val (lines, angles) = lines(bmp)
-        val blocks = Layout.blocks(lines)
+        val blocks = Layout.blocks(lines, sizeTolerance = 0.3f)
         Layout.assignRoom(blocks, { bmp.height.toFloat() - 8f }, { bmp.width.toFloat() })
         val french = blocks.joinToString("\n\n") { it.text }
         onStage("translating")
@@ -114,32 +115,34 @@ class Scanner(private val context: Context, private val engine: Engine) {
 
     /** Redraws [blocks] with their translations onto a copy of [src]. */
     fun render(src: Bitmap, blocks: List<Block>, translations: Map<Block, String>, angle: Float): Bitmap {
-        val out = src.copy(Bitmap.Config.ARGB_8888, true)
+        val w = src.width; val h = src.height
+        val px = IntArray(w * h)
+        src.getPixels(px, 0, w, 0, 0, w, h)
+        val orig = px.copyOf()
+        // 1) Erase the French ink only (paper, ruled lines and backgrounds stay).
+        val colours = HashMap<Block, Pair<Int, Int>>()
+        for (b in blocks) {
+            if (translations[b] == null) continue
+            val bg = Inpaint.background(orig, w, h, b.left.toInt() - 4, b.top.toInt() - 4, b.right.toInt() + 4, b.bottom.toInt() + 4)
+            val ink = Inpaint.ink(orig, w, h, b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt(), bg)
+            colours[b] = bg to ink
+            for (l in b.lines) {
+                val pad = (l.height * 0.15f).toInt() + 1
+                val lbg = Inpaint.background(orig, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad)
+                Inpaint.eraseInk(px, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad, lbg, dilate = max(2, (l.height / 12).toInt()))
+            }
+        }
+        val out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, true)
+        // 2) Draw the English in the same place and colour.
         val c = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
-        val fill = Paint()
         for (b in blocks) {
             val tr = translations[b] ?: continue
-            val bg = backgroundOf(src, b)
-            val fg = inkOf(src, b, bg)
-            // Erase the French text line by line (keeps backgrounds between paragraphs intact).
-            for (l in b.lines) {
-                val pad = l.height * 0.12f
-                fill.color = backgroundOf(src, l.left, l.top, l.right, l.bottom)
-                c.drawRect(RectF(l.left - pad, l.top - pad, l.right + pad, l.bottom + pad), fill)
-            }
-            val bold = isBold(src, b, bg)
-            val tf = if (bold) sansBold else sans
-            paint.typeface = tf
+            val (bg, fg) = colours[b] ?: continue
+            paint.typeface = if (isBold(src, b, bg)) sansBold else sans
             paint.color = fg
             val measurer = TextMeasurer { text, size, _ -> paint.textSize = size; paint.measureText(text) }
             val placement = Layout.fit(b, tr, measurer)
-            // Clear any extra room the English needs below the original block.
-            val lastBaseline = placement.lines.lastOrNull()?.baseline ?: b.bottom
-            if (lastBaseline + placement.fontSize * 0.3f > b.bottom) {
-                fill.color = bg
-                c.drawRect(RectF(b.left, b.bottom, max(b.right, placement.lines.maxOfOrNull { it.segments.lastOrNull()?.let { s -> s.x + s.width } ?: 0f } ?: b.right), lastBaseline + placement.fontSize * 0.35f), fill)
-            }
             paint.textSize = placement.fontSize
             c.save()
             if (abs(angle) in 0.5f..15f) c.rotate(angle, b.left, b.top)

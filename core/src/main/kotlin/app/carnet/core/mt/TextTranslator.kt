@@ -5,6 +5,9 @@ import app.carnet.core.text.Segmenter
 /** Anything that can translate a list of sentences (the model, or a fake in tests). */
 fun interface SentenceTranslator {
     fun translateSentences(sentences: List<String>, cancel: () -> Boolean): List<String>
+
+    /** A slower, more careful pass (beam search) used to re-check suspicious sentences. */
+    fun translateCarefully(sentences: List<String>, cancel: () -> Boolean): List<String> = translateSentences(sentences, cancel)
 }
 
 data class GlossaryEntry(val source: String, val target: String)
@@ -20,6 +23,8 @@ class TextTranslator(
     private val engine: SentenceTranslator,
     glossary: List<GlossaryEntry> = emptyList(),
     cacheSize: Int = 4096,
+    /** Built-in school vocabulary and number normalisation (see SchoolTerms, FrenchNumbers). */
+    private val schoolMode: Boolean = true,
 ) {
     @Volatile private var glossaryRules: List<Pair<Regex, String>> = compile(glossary)
 
@@ -54,7 +59,14 @@ class TextTranslator(
             for (i in list.indices step chunk) {
                 if (cancel()) throw InterruptedException("cancelled")
                 val part = list.subList(i, minOf(list.size, i + chunk))
-                val res = engine.translateSentences(part.map { applyGlossary(it) }, cancel)
+                val prepared = part.map { prepare(it) }
+                val res = engine.translateSentences(prepared, cancel).toMutableList()
+                // Number guard: if digits don't survive translation, re-translate carefully and keep the better one.
+                val suspicious = prepared.indices.filter { numberScore(prepared[it], res[it]) < 1.0 }
+                if (suspicious.isNotEmpty()) {
+                    val retry = engine.translateCarefully(suspicious.map { prepared[it] }, cancel)
+                    suspicious.forEachIndexed { k, idx -> if (numberScore(prepared[idx], retry[k]) > numberScore(prepared[idx], res[idx])) res[idx] = retry[k] }
+                }
                 synchronized(cache) { part.forEachIndexed { k, src -> cache[src] = postProcess(src, res[k]) } }
                 done += part.size
                 progress(done, list.size)
@@ -76,11 +88,44 @@ class TextTranslator(
 
     private fun keyOf(s: String) = s.trim()
 
-    private fun applyGlossary(s: String): String {
+    /** Source-side preparation: numbers as digits, school terms, then the user's glossary (which wins). */
+    private fun prepare(s: String): String {
         var out = s
         for ((re, target) in glossaryRules) out = re.replace(out) { target }
+        if (schoolMode) {
+            out = app.carnet.core.text.FrenchNumbers.normalize(out)
+            out = app.carnet.core.text.SchoolTerms.apply(out)
+        }
         return out
     }
+
+    /**
+     * Source ranges that [prepare] rewrites (glossary, school terms, numbers) with their replacement.
+     * Formatting projection uses them: a bold "huit" inside "huit heures" is found as "8" in the English.
+     */
+    fun replacements(text: String): List<Pair<IntRange, String>> {
+        val out = ArrayList<Pair<IntRange, String>>()
+        for ((re, target) in glossaryRules) re.findAll(text).forEach { out.add(it.range to target) }
+        if (schoolMode) { out.addAll(app.carnet.core.text.FrenchNumbers.matches(text)); out.addAll(app.carnet.core.text.SchoolTerms.matches(text)) }
+        return out
+    }
+
+    /** Share of the source's numbers found in the translation (1.0 = all, or none to check). */
+    private fun numberScore(src: String, tr: String): Double {
+        val a = digits.findAll(src).map { it.value }.toList()
+        if (a.isEmpty()) return if (digits.containsMatchIn(tr) && hourWords.containsMatchIn(tr)) 0.5 else 1.0
+        val b = digits.findAll(tr).map { it.value }.toMutableList()
+        var hit = 0
+        for (n in a) {
+            val alt = n.toIntOrNull()?.let { if (it in 13..23) (it - 12).toString() else null }
+            val i = b.indexOf(n).takeIf { it >= 0 } ?: alt?.let { b.indexOf(it) }?.takeIf { it >= 0 }
+            if (i != null) { hit++; b.removeAt(i) }
+        }
+        return hit.toDouble() / a.size
+    }
+
+    private val digits = Regex("\\d+")
+    private val hourWords = Regex("(?i)\\b(a\\.m\\.|p\\.m\\.|am|pm|o'clock)\\b")
 
     /** Small fixes that the sentence model gets wrong in a school context. */
     private fun postProcess(src: String, tr: String): String {
@@ -103,10 +148,19 @@ class TextTranslator(
     }
 
     companion object {
+        private val frArticle = Regex("^(?i)(?:(?:un|une|le|la|les|des|du|de la)\\s+|(?:l|de l)['’])")
+        private val enArticle = Regex("^(?i)(a|an|the|some)\\s+")
+
+        /** "un contrôle → a test" also matches "le contrôle", "ce contrôle"…: articles are dropped from both sides. */
         private fun compile(entries: List<GlossaryEntry>): List<Pair<Regex, String>> =
             entries.filter { it.source.isNotBlank() && it.target.isNotBlank() }
-                .sortedByDescending { it.source.length }
-                .map { Regex("(?i)(?<![\\p{L}\\p{N}])" + Regex.escape(it.source.trim()) + "(?![\\p{L}\\p{N}])") to it.target.trim() }
+                .map { e ->
+                    val src = e.source.trim(); val tgt = e.target.trim()
+                    val bare = frArticle.replace(src, "")
+                    if (bare.isNotBlank() && bare != src) bare to enArticle.replace(tgt, "") else src to tgt
+                }
+                .sortedByDescending { it.first.length }
+                .map { (src, tgt) -> Regex("(?i)(?<![\\p{L}\\p{N}])" + Regex.escape(src).replace("'", "['’]") + "(?![\\p{L}\\p{N}])") to tgt }
     }
 }
 
@@ -114,4 +168,6 @@ class TextTranslator(
 class MarianSentenceTranslator(private val model: MarianModel, private val beam: Int = 1) : SentenceTranslator {
     override fun translateSentences(sentences: List<String>, cancel: () -> Boolean): List<String> =
         model.translate(sentences, beam = beam, cancel = cancel)
+    override fun translateCarefully(sentences: List<String>, cancel: () -> Boolean): List<String> =
+        model.translate(sentences, beam = 4, cancel = cancel)
 }

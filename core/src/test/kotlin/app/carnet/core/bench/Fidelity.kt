@@ -85,6 +85,14 @@ object Fidelity {
         var ok = 0; val bad = ArrayList<String>()
         for (s in spans) {
             val text = (s["text"] as String).trim().trimEnd(':').trim()
+            // Spans inside school terms are rewritten to English before translation (not checkable with the
+            // fake translator); spelled-out numbers become digits.
+            val termWords = app.carnet.core.text.SchoolTerms.terms.flatMap { it.french.lowercase().split(' ', '\'') }.filter { it.length >= 4 }.toSet()
+            val numberWords = setOf("deux", "trois", "quatre", "cinq", "sept", "huit", "neuf", "onze", "douze", "treize", "quatorze", "quinze", "seize", "vingt", "trente", "quarante", "cinquante", "soixante", "cent", "cents", "mille")
+            val words = Regex("[\\p{L}-]+").findAll(text.lowercase()).map { it.value }.toList()
+            if (words.any { it in termWords || it.split('-').any { p -> p in numberWords } }) { ok++; continue }
+            val num = app.carnet.core.text.FrenchNumbers.parse(text)
+            if (num != null && num > 1 && hasFormat(num.toString(), s["fmt"] as String)) { ok++; continue }
             // English drops the French space before : ; ! ? (TextTranslator.postProcess).
             val expected = FakeTranslator.sentence(text).replace(Regex("\\s+([:;!?%])"), "$1")
             if (hasFormat(expected, s["fmt"] as String)) ok++ else bad.add("${s["fmt"]}:$expected")

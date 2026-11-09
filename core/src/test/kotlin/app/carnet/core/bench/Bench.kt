@@ -32,7 +32,7 @@ private fun engineFor(spec: String): SentenceTranslator =
 private fun mt(a: List<String>) {
     val model = MarianModel(DirectorySource(File(a[0])))
     val beam = a.getOrNull(3)?.toInt() ?: 1
-    val tr = TextTranslator(MarianSentenceTranslator(model, beam))
+    val tr = TextTranslator(MarianSentenceTranslator(model, beam), schoolMode = a.getOrNull(4) != "noschool")
     val src = File(a[1]).readLines()
     // Warm-up so the first-call cost isn't measured.
     tr.translate("Bonjour à tous.")

@@ -72,8 +72,8 @@ fun interface TextMeasurer {
 
 object Layout {
 
-    /** Groups lines (already in reading order per page) into paragraph blocks. */
-    fun blocks(lines: List<TextLine>): List<Block> {
+    /** Groups lines (already in reading order per page) into paragraph blocks. [sizeTolerance]: 0.12 for PDFs, ~0.3 for OCR. */
+    fun blocks(lines: List<TextLine>, sizeTolerance: Float = 0.12f): List<Block> {
         val out = ArrayList<Block>()
         var cur = ArrayList<TextLine>()
         fun flush() { if (cur.isNotEmpty()) { out.add(makeBlock(cur)); cur = ArrayList() } }
@@ -83,7 +83,8 @@ object Layout {
             if (prev == null) { cur.add(l); continue }
             val size = max(prev.fontSize, l.fontSize)
             val gap = l.top - prev.bottom
-            val sameSize = abs(prev.fontSize - l.fontSize) <= 0.12f * size
+            // OCR'd line boxes hug the glyphs, so a line without descenders looks ~20% smaller: be tolerant.
+            val sameSize = abs(prev.fontSize - l.fontSize) <= sizeTolerance * size
             val overlapX = min(prev.right, l.right) - max(prev.left, l.left)
             val aligned = abs(prev.left - l.left) <= 0.8f * size || overlapX > 0.5f * min(prev.width, l.width)
             val close = l.page == prev.page && gap >= -0.4f * size && gap <= 0.75f * size
@@ -131,7 +132,9 @@ object Layout {
             ls.size > 1 && ls.all { abs(it.right - right) < 2 } && ls.any { abs(it.left - left) > 3 } -> Align.RIGHT
             else -> Align.LEFT
         }
-        return Block(ls.first().page, left, top, right, bottom, ls, text, sizes[sizes.size / 2], lh.coerceAtLeast(sizes[0]), align, styles, runs)
+        // Upper-middle size: robust to short lines and to lines without ascenders/descenders.
+        val size = sizes[(sizes.size * 3) / 4]
+        return Block(ls.first().page, left, top, right, bottom, ls, text, size, lh.coerceAtLeast(sizes[0]), align, styles, runs)
     }
 
     /**

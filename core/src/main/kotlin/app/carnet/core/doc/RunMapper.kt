@@ -30,6 +30,8 @@ object RunMapper {
 
     internal class Span(val format: Int, val text: String, val start: Int) {
         var translated: String? = null
+        /** Replacements (school terms, numbers, glossary) overlapping this span, as extra search candidates. */
+        var rewritten: List<String> = emptyList()
     }
 
     /** Translates all [jobs] with as few batched model calls as possible. */
@@ -52,6 +54,11 @@ object RunMapper {
                 pos += r.text.length
             }
             j.baseFormat = base
+            val reps = translator.replacements(j.full)
+            for (s in j.spans) {
+                val r = s.start until s.start + s.text.length
+                s.rewritten = reps.filter { (range, _) -> range.first <= r.last && r.first <= range.last }.map { it.second }
+            }
             for (s in j.spans) if (Segmenter.isLinguistic(s.text)) requests.add(s.text.trim())
         }
         val out = translator.translateAll(requests, cancel, progress)
@@ -74,6 +81,11 @@ object RunMapper {
             val core = s.text.trim()
             if (core.isEmpty()) continue
             val candidates = LinkedHashSet<String>()
+            // A term rewritten before translation is searched in its rewritten form first.
+            for (rw in s.rewritten) {
+                candidates.add(rw)
+                rw.split(' ').filter { it.length > 2 }.let { ws -> if (ws.size > 1) candidates.addAll(ws.filter { w -> s.text.contains(w, true) }) }
+            }
             s.translated?.trim()?.let { tr ->
                 candidates.add(tr)
                 candidates.add(tr.trimEnd('.', ':', ';', ',', '!', '?'))

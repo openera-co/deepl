@@ -7,6 +7,8 @@ import app.carnet.core.mt.GlossaryEntry
 import app.carnet.core.mt.SentenceTranslator
 import app.carnet.core.mt.TextTranslator
 import app.carnet.core.text.Dictation
+import app.carnet.core.text.FrenchNumbers
+import app.carnet.core.text.SchoolTerms
 import app.carnet.core.text.Segmenter
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -58,7 +60,29 @@ class TextTest {
         val seen = ArrayList<String>()
         val tr = TextTranslator(SentenceTranslator { s, _ -> seen.addAll(s); s }, listOf(GlossaryEntry("un contrôle", "a test"), GlossaryEntry("TD", "tutorial")))
         tr.translate("Demain, un contrôle de maths. Le TD est annulé. Le TDA aussi.")
-        assertEquals(listOf("Demain, a test de maths.", "Le tutorial est annulé.", "Le TDA aussi."), seen)
+        assertEquals(listOf("Demain, un test de maths.", "Le tutorial est annulé.", "Le TDA aussi."), seen)
+    }
+
+    @Test fun glossaryIgnoresArticles() {
+        val seen = ArrayList<String>()
+        val tr = TextTranslator(SentenceTranslator { s, _ -> seen.addAll(s); s }, listOf(GlossaryEntry("un contrôle", "a test"), GlossaryEntry("l'exposé", "the presentation")), schoolMode = false)
+        tr.translate("Le contrôle est demain. Ce contrôle compte double. Mon exposé est prêt. Une lecture du contrôleur.")
+        assertEquals(listOf("Le test est demain.", "Ce test compte double.", "Mon presentation est prêt.", "Une lecture du contrôleur."), seen)
+    }
+
+    @Test fun frenchNumbersBecomeDigitsBeforeUnits() {
+        assertEquals("ouvert de 8 heures à 17 heures", FrenchNumbers.normalize("ouvert de huit heures à dix-sept heures"))
+        assertEquals("il coûte 350 euros et pèse 92 kg", FrenchNumbers.normalize("il coûte trois cent cinquante euros et pèse quatre-vingt-douze kg"))
+        assertEquals("pendant 72 ans", FrenchNumbers.normalize("pendant soixante-douze ans"))
+        assertEquals("les trois mousquetaires", FrenchNumbers.normalize("les trois mousquetaires"))
+        assertEquals("une heure", FrenchNumbers.normalize("une heure"))
+        assertEquals(21, FrenchNumbers.parse("vingt et un")); assertEquals(1999, FrenchNumbers.parse("mille neuf cent quatre-vingt-dix-neuf"))
+    }
+
+    @Test fun schoolTermsAreReplaced() {
+        assertEquals("Dans un right-angled triangle, le gradient vaut 2.", SchoolTerms.apply("Dans un triangle rectangle, le coefficient directeur vaut 2."))
+        assertEquals("The homework is due lundi.", SchoolTerms.apply("Le devoir est à rendre lundi."))
+        assertEquals("Le citoyen a des droits et des devoirs.", SchoolTerms.apply("Le citoyen a des droits et des devoirs."))
     }
 
     @Test fun runMapperProjectsBoldTerm() {

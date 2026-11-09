@@ -48,7 +48,10 @@ class Engine(private val context: Context) {
                 val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
                 val m = MarianModel(AssetSource(context, "models/opus-fr-en"), threads = threads)
                 model = m
-                val sentence = SentenceTranslator { s, cancel -> m.translate(s, beam = beam, cancel = cancel) }
+                val sentence = object : SentenceTranslator {
+                    override fun translateSentences(sentences: List<String>, cancel: () -> Boolean) = m.translate(sentences, beam = beam, cancel = cancel)
+                    override fun translateCarefully(sentences: List<String>, cancel: () -> Boolean) = m.translate(sentences, beam = 4, cancel = cancel)
+                }
                 val tr = TextTranslator(sentence, glossary)
                 tr.spelling = spelling
                 // Warm-up: first ONNX Runtime run allocates arenas and JITs kernels.
