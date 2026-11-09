@@ -8,3 +8,14 @@
 # JNI bridges for native engines.
 -keepclasseswithmembernames class * { native <methods>; }
 -keep class app.carnet.nativeai.** { *; }
+
+# Apache POI (old .doc/.xls files): desktop-only references that are never used on Android.
+-dontwarn java.awt.**
+-dontwarn javax.imageio.**
+-dontwarn javax.xml.stream.**
+-dontwarn javax.swing.**
+-dontwarn aQute.bnd.annotation.**
+-dontwarn org.osgi.framework.**
+-dontwarn org.apache.logging.log4j.**
+# POI builds Excel/Word records by reflection.
+-keep class org.apache.poi.** { *; }
