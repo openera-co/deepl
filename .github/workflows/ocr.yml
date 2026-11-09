@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get install -y -q fonts-dejavu fonts-liberation fonts-crosextra-carlito fonts-freefont-ttf > /dev/null
           pip install -q pillow python-docx python-pptx openpyxl odfpy reportlab
-          python tools/ocr/make_set.py ocrset 140 60
+          python tools/ocr/make_set.py ocrset 140 60 hand-fonts
       - uses: gradle/actions/setup-gradle@v4
       - name: Build for the emulator
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -Pcarnet.abi=x86_64
