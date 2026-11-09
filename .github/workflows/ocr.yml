@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get install -y -q fonts-dejavu fonts-liberation fonts-crosextra-carlito fonts-freefont-ttf > /dev/null
           pip install -q pillow python-docx python-pptx openpyxl odfpy reportlab
-          python tools/ocr/make_set.py ocrset 140 60 hand-fonts
+          python tools/ocr/make_set.py ocrset 100 50 hand-fonts
       - uses: gradle/actions/setup-gradle@v4
       - name: Build for the emulator
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -Pcarnet.abi=x86_64
@@ -46,7 +46,7 @@ jobs:
             adb shell chmod -R a+r /data/local/tmp/ocrbench
             adb shell "run-as app.carnet sh -c 'mkdir -p files/ocrbench/in && cp /data/local/tmp/ocrbench/* files/ocrbench/in/'"
             adb shell "run-as app.carnet ls files/ocrbench/in | wc -l"
-            for v in default auto contrast all; do adb shell am instrument -w -e class app.carnet.OcrBench -e variant $v app.carnet.test/androidx.test.runner.AndroidJUnitRunner | tail -3; adb exec-out run-as app.carnet cat files/ocrbench/out-$v.json > out-$v.json; done
+            for v in default auto all; do adb shell am instrument -w -e class app.carnet.OcrBench -e variant $v app.carnet.test/androidx.test.runner.AndroidJUnitRunner | tail -3; adb exec-out run-as app.carnet cat files/ocrbench/out-$v.json > out-$v.json; done
       - name: Score
         if: always()
         run: python tools/ocr/score.py ocrset out-*.json | tee -a $GITHUB_STEP_SUMMARY

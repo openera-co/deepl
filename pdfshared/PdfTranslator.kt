@@ -203,6 +203,8 @@ class PdfTranslator(private val fonts: FontProvider) {
     private val lineOps = IdentityHashMap<TextLine, IntArray>()
     private var opCounts: Map<Int, Int> = emptyMap()
     private var opDisps: Map<Int, Map<Int, Float>> = emptyMap()
+    /** Pages whose content couldn't be read (left untranslated). */
+    val skippedPages = ArrayList<Int>()
     /** Rules (table borders, box edges) per page from the last [extract]. */
     var pageRules: Map<Int, Rules> = emptyMap(); private set
     fun rulesOf(page: Int): Rules = pageRules[page] ?: Rules.NONE
@@ -215,8 +217,12 @@ class PdfTranslator(private val fonts: FontProvider) {
     fun extract(doc: PDDocument): List<TextLine> {
         val colors = IdentityHashMap<TextPosition, Int>()
         val s = Stripper(colors)
-        s.getText(doc)
-        lineOps.clear(); lineForms.clear(); lineAnchor.clear()
+        // Page by page: a damaged object on one page leaves that page as it is instead of failing the file.
+        for (i in 1..doc.numberOfPages) {
+            s.startPage = i; s.endPage = i
+            try { s.getText(doc) } catch (e: Exception) { if (e is InterruptedException) throw e; skippedPages.add(i - 1) }
+        }
+        lineOps.clear(); lineForms.clear(); lineAnchor.clear(); skippedPages.clear()
         opCounts = s.opCount; opDisps = s.disps
         pageRules = s.rules.mapValues { (_, v) -> Rules(v.first, v.second) }
         class Part(val page: Int, val ps: List<TextPosition>, val colors: List<Int>) {
