@@ -307,7 +307,8 @@ class PptxReader(private val pkg: ZipPackage) {
     }
 
     private fun xfrm(e: Element): FloatArray? {
-        val x = e.getElementsByTagNameNS(A, "xfrm").item(0) as? Element ?: return null
+        // Shapes use a:xfrm; graphic frames (tables, charts) use p:xfrm.
+        val x = (e.getElementsByTagNameNS(A, "xfrm").item(0) ?: e.getElementsByTagNameNS(P, "xfrm").item(0)) as? Element ?: return null
         val off = Xml.child(x, A, "off") ?: return null; val ext = Xml.child(x, A, "ext") ?: return null
         return floatArrayOf(off.getAttribute("x").toFloat() / emu, off.getAttribute("y").toFloat() / emu, ext.getAttribute("cx").toFloat() / emu, ext.getAttribute("cy").toFloat() / emu)
     }

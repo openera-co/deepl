@@ -209,7 +209,10 @@ fun DocResultScreen(nav: NavHostController, id: String) {
         })
         Segmented(listOf("Original", "English"), tab, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) { tab = it; page = 0 }
         Box(Modifier.weight(1f).fillMaxWidth().background(pal.surfaceAlt), contentAlignment = Alignment.Center) {
-            AnimatedContent(bitmap, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(100)) }, label = "page") { b ->
+            if (result.extension.equals("zip", true)) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                FileBadge("ZIP", size = 64.dp, fontSize = 13); Spacer(Modifier.height(12.dp))
+                Text(remember(result) { "${runCatching { java.util.zip.ZipFile(result).use { it.size() } }.getOrDefault(0)} files" }, style = Type.bodyStrong, color = pal.ink)
+            } else AnimatedContent(bitmap, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(100)) }, label = "page") { b ->
                 if (b == null) Dots(pal.accent)
                 else Image(b.asImageBitmap(), "Page ${page + 1}", contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize().padding(16.dp).shadow(6.dp, RoundedCornerShape(2.dp)))
@@ -230,6 +233,7 @@ fun DocResultScreen(nav: NavHostController, id: String) {
 private fun preview(ctx: android.content.Context, f: File, cache: File): File? = runCatching {
     if (!f.exists()) return null
     if (f.extension.equals("pdf", true)) return f
+    if (f.extension.lowercase() in setOf("zip", "wav", "bin")) return null
     if (!cache.exists()) Converters.toPdf(ctx, f, cache)
     cache
 }.getOrNull()

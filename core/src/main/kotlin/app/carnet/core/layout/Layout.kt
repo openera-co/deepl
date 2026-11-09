@@ -57,6 +57,8 @@ class Block(
     /** Rightmost x a single-line block may extend to (headings, labels). */
     var maxRight: Float = right
     var minLeft: Float = left
+    /** The page edge: text may never go below it. */
+    var hardBottom: Float = Float.MAX_VALUE
 }
 
 data class Segment(val text: String, val style: Style, val x: Float, val width: Float)
@@ -152,6 +154,7 @@ object Layout {
                 if (overlap > 0) limit = min(limit, o.top - b.lineHeight * 0.25f)
             }
             b.maxBottom = max(b.bottom, limit)
+            b.hardBottom = max(b.bottom, pageBottom(b.page))
             // Horizontal room: up to the text column's right edge (or the page margin), stopping at blocks beside it.
             val pageLeft = same.minOf { it.left }
             val columnRight = max(b.right, min(same.maxOf { it.right }, pageRight(b.page) - pageLeft))
@@ -164,8 +167,9 @@ object Layout {
                 if (o.left >= b.right - 0.5f) right = min(right, o.left - b.fontSize * 0.6f)
                 if (o.right <= b.left + 0.5f) left = max(left, o.right + b.fontSize * 0.6f)
             }
-            b.maxRight = max(b.right, right)
-            b.minLeft = min(b.left, left)
+            // Never beyond the page, even if the source text was cut off at the edge.
+            b.maxRight = min(max(b.right, right), pageRight(b.page))
+            b.minLeft = max(0f, min(b.left, left))
         }
     }
 
@@ -177,7 +181,7 @@ object Layout {
         val words = toWords(block, regions)
         val single = block.lines.size == 1
         val (left, right) = when {
-            !single -> block.left to block.right
+            !single -> block.left to min(block.right, block.maxRight)
             block.align == Align.CENTER -> {
                 val c = (block.left + block.right) / 2; val half = min(c - block.minLeft, block.maxRight - c)
                 (c - half) to (c + half)
@@ -194,7 +198,7 @@ object Layout {
         while (size > block.fontSize * 0.4f) {
             val h = (lines.size - 1) * size * ratio + size
             if (h <= max(block.height, room) + 0.5f) break
-            if (size <= block.fontSize * minScale && h <= room + block.lineHeight * 1.5f) break
+            if (size <= block.fontSize * minScale && h <= room + block.lineHeight * 1.5f && block.top + h <= block.hardBottom) break
             size *= 0.95f
             lines = wrap(words, maxW, size, m)
         }

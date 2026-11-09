@@ -72,6 +72,7 @@ object Recorder {
     private var pipeWrite: ParcelFileDescriptor.AutoCloseOutputStream? = null
     private var wavFile: File? = null
     private var segStart = 0L
+    private var failures = 0
     private lateinit var appCtx: Context
     private const val RATE = 16000
 
@@ -82,6 +83,7 @@ object Recorder {
     fun start(c: Context, title: String) {
         if (_state.value.recording) return
         appCtx = c.applicationContext
+        failures = 0
         val id = appCtx.app.library.newId()
         val dir = appCtx.app.library.dir(id)
         val shareMic = Build.VERSION.SDK_INT >= 33
@@ -159,6 +161,18 @@ object Recorder {
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
         override fun onError(error: Int) {
+            val normal = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            if (!normal) failures++
+            // Some recognisers can't take our shared audio stream: fall back to their own microphone.
+            if (failures >= 4 && audio != null) {
+                audio?.runCatching { stop(); release() }; audio = null
+                pipeWrite?.runCatching { close() }; pipeWrite = null
+                _state.value = _state.value.copy(audio = false)
+                failures = 0
+            } else if (failures >= 8) {
+                _state.value = _state.value.copy(error = "Speech recognition isn't working on this phone. Audio is still being kept if possible.", recognizer = false)
+                return
+            }
             // No match / timeout are normal pauses in dictation: just listen again.
             if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
                 _state.value = _state.value.copy(error = "French speech recognition isn't installed on this phone", recognizer = false)
@@ -167,8 +181,8 @@ object Recorder {
             if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { _state.value = _state.value.copy(error = "Microphone permission needed"); return }
             main.postDelayed({ restart() }, if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 400 else 60)
         }
-        override fun onResults(results: Bundle?) { commit(results); main.post { restart() } }
-        override fun onSegmentResults(segmentResults: Bundle) { commit(segmentResults) }
+        override fun onResults(results: Bundle?) { failures = 0; commit(results); main.post { restart() } }
+        override fun onSegmentResults(segmentResults: Bundle) { failures = 0; commit(segmentResults) }
         override fun onEndOfSegmentedSession() { main.post { restart() } }
         override fun onPartialResults(partialResults: Bundle?) {
             val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: return

@@ -46,8 +46,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Unit tests (core)
-        run: ./gradlew :core:test
+      - name: Unit tests (core) and app smoke test
+        run: ./gradlew :core:test :app:testDebugUnitTest
 
       - name: Build release APK (with native engines)
         run: ./gradlew :app:assembleRelease -Pcarnet.native=true

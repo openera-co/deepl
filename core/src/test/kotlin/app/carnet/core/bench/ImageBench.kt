@@ -72,8 +72,8 @@ object ImageBench {
         val ms = (System.nanoTime() - t0) / 1_000_000
         out?.let { it.parentFile.mkdirs(); ImageIO.write(img, "jpg", it) }
         val checks = ArrayList<Check>()
-        val outside = placedBoxes.count { (_, r, _) -> r[0] < -1 || r[2] > img.width + 1 || r[1] < -1 || r[3] > img.height + 1 }
-        checks += Check("text inside image", outside == 0, "$outside blocks")
+        val out = placedBoxes.filter { (_, r, _) -> r[0] < -1 || r[2] > img.width + 1 || r[1] < -1 || r[3] > img.height + 1 }
+        checks += Check("text inside image", out.isEmpty(), out.joinToString { (b, r, sc) -> "box=${r.map { it.toInt() }} img=${img.width}x${img.height} scale=${"%.2f".format(sc)} lines=${b.lines.size} '${b.text.take(30)}'" })
         var overlaps = 0
         for (i in placedBoxes.indices) for (j in i + 1 until placedBoxes.size) {
             val a = placedBoxes[i].second; val b = placedBoxes[j].second
