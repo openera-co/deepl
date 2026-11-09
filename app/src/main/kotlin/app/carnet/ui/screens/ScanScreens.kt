@@ -195,7 +195,7 @@ fun ScanScreen(nav: NavHostController, settings: AppSettings) {
                             modifier = Modifier.clip(CircleShape).background(if (i == mode) Color.White.copy(alpha = 0.16f) else Color.Transparent).tap { mode = i }.padding(horizontal = 14.dp, vertical = 8.dp))
                     }
                 }
-                if (mode == 1 && !ctx.app.models.isInstalled("handwriting") && ctx.app.models.supported("handwriting")) {
+                if (mode == 1 && !ctx.app.scanner.handwritingReady && !ctx.app.models.isInstalled("handwriting")) {
                     Text("Get the handwriting model for best results", color = Color(0xFFB9BCC3), fontSize = 12.sp,
                         modifier = Modifier.padding(top = 8.dp).tap { nav.navigate("models") })
                 }
@@ -233,7 +233,9 @@ suspend fun scanFiles(ctx: Context, files: List<File>, handwriting: Boolean, rep
     files.forEachIndexed { i, f ->
         report(if (files.size > 1) "Page ${i + 1} of ${files.size}" else "Reading", i, files.size)
         val bmp = ctx.app.scanner.load(f)
-        val page = if (handwriting && ctx.app.models.isInstalled("handwriting")) Gemma.get(ctx).scanPage(bmp, ctx) else ctx.app.scanner.scan(bmp) { st -> report(st.replaceFirstChar { it.uppercase() }, i, files.size) }
+        // Handwriting: the dedicated handwriting reader if downloaded, else TranslateGemma, else the printed-text reader.
+        val page = if (handwriting && !ctx.app.scanner.handwritingReady && ctx.app.models.isInstalled("handwriting")) Gemma.get(ctx).scanPage(bmp, ctx)
+            else ctx.app.scanner.scan(bmp, handwriting) { st -> report(st.replaceFirstChar { it.uppercase() }, i, files.size) }
         withContext(Dispatchers.IO) {
             File(dir, "page-${i + 1}.jpg").outputStream().use { page.original.compress(Bitmap.CompressFormat.JPEG, 90, it) }
             File(dir, "page-${i + 1}.en.jpg").outputStream().use { page.translated.compress(Bitmap.CompressFormat.JPEG, 92, it) }

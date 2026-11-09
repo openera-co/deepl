@@ -4,7 +4,7 @@
 # baselines, then exports int8 ONNX for the app.
 import subprocess, os, random, json, time, io, math, urllib.request
 def sh(c): print("+", c, flush=True); subprocess.run(c, shell=True, check=False)
-sh('pip install -q "transformers==4.56.2" "datasets>=3" jiwer "optimum[onnxruntime]==1.27.0" onnx onnxruntime 2>&1 | tail -2')
+sh('pip install -q "transformers==4.56.2" "datasets>=3" jiwer 2>&1 | tail -2')
 import torch, jiwer, numpy as np
 from datasets import load_dataset, Dataset, concatenate_datasets
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -132,13 +132,5 @@ evaluate(model, rtest, "carnet trocr-small French (trained) RIMES test beam4", b
 evaluate(model, syn_test, "carnet trocr-small French (trained) synthetic test")
 model.save_pretrained(f"{OUT}/carnet-htr-fr"); proc.save_pretrained(f"{OUT}/carnet-htr-fr")
 
-# ---- export for the phone (ONNX, int8)
-sh(f"optimum-cli export onnx --model {OUT}/carnet-htr-fr --task image-to-text-with-past {OUT}/onnx 2>&1 | tail -3")
-try:
-    from onnxruntime.quantization import quantize_dynamic, QuantType
-    for n in ["encoder_model.onnx", "decoder_model_merged.onnx"]:
-        if os.path.exists(f"{OUT}/onnx/{n}"):
-            quantize_dynamic(f"{OUT}/onnx/{n}", f"{OUT}/onnx/{n.replace('.onnx', '.int8.onnx')}", weight_type=QuantType.QInt8, per_channel=True, extra_options={"EnableSubgraph": True})
-    log["onnx_files"] = {f: os.path.getsize(f"{OUT}/onnx/{f}") // 1_000_000 for f in os.listdir(f"{OUT}/onnx")}
-except Exception as e: log["quantize"] = str(e)[:300]
+# ONNX export for the phone is done from this checkpoint by tools/export_htr.py.
 save_log(); print(json.dumps(log, indent=1))

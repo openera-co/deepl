@@ -218,7 +218,8 @@ fun aboutModel(m: app.carnet.models.ModelSpec): String = when {
     m.direction == "en-fr" && m.quality == "fast" -> "English into French. Smaller and about twice as fast, a little less accurate."
     m.direction == "fr-en" -> "Translates French text, photos, documents and dictation into English. Best quality."
     m.direction == "en-fr" -> "Translates English into French. Best quality."
-    m.id == "handwriting" -> "Reads handwriting in photos and polishes hard sentences. Large and slower."
+    m.id == "htr-fr" -> "Reads handwritten French notes in photos. Small and quick."
+    m.id == "handwriting" -> "Reads difficult handwriting in photos and polishes hard sentences. Large and slower."
     m.id == "whisper-small" -> "Re-listens to recordings after you stop for a cleaner transcript. Quick."
     m.id == "whisper-turbo" -> "Re-listens to recordings after you stop. Most accurate, slower."
     else -> m.purpose

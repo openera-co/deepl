@@ -26,6 +26,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -47,6 +48,7 @@ data class ScanPage(
  * in the same place, colour and alignment, on a background matched to the paper.
  */
 class Scanner(private val context: Context, private val engine: Engine) {
+    companion object { const val HTR_ID = "htr-fr" }
     private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
     private val sans by lazy { Typeface.createFromAsset(context.assets, "fonts/LiberationSans-Regular.ttf") }
     private val sansBold by lazy { Typeface.createFromAsset(context.assets, "fonts/LiberationSans-Bold.ttf") }
@@ -101,10 +103,38 @@ class Scanner(private val context: Context, private val engine: Engine) {
         return lines to angles
     }
 
+    /** The handwriting recognizer (downloaded model "htr-fr"), loaded on first use. */
+    private var htr: app.carnet.core.htr.HtrModel? = null
+    private val htrLock = kotlinx.coroutines.sync.Mutex()
+    val handwritingReady: Boolean get() = app.carnet.CarnetApp.instance.models.isInstalled(HTR_ID)
+
+    /**
+     * Handwriting: the page's text lines are found by the regular recognizer, then each line is
+     * re-read by the handwriting model from its crop of the photo.
+     */
+    private suspend fun readHandwriting(bmp: Bitmap, lines: List<TextLine>): List<TextLine> = htrLock.withLock {
+        val m = htr ?: app.carnet.core.htr.HtrModel(app.carnet.core.mt.DirectorySource(app.carnet.CarnetApp.instance.models.dir(HTR_ID))).also { htr = it }
+        val crops = lines.map { l ->
+            val padY = (l.height * 0.2f).toInt() + 2; val padX = (l.height * 0.3f).toInt() + 2
+            val x0 = (l.left.toInt() - padX).coerceIn(0, bmp.width - 1); val y0 = (l.top.toInt() - padY).coerceIn(0, bmp.height - 1)
+            val x1 = (l.right.toInt() + padX).coerceIn(x0 + 1, bmp.width); val y1 = (l.bottom.toInt() + padY).coerceIn(y0 + 1, bmp.height)
+            val w = x1 - x0; val h = y1 - y0
+            val px = IntArray(w * h); bmp.getPixels(px, 0, w, x0, y0, w, h)
+            Triple(px, w, h)
+        }
+        val texts = m.recognize(crops)
+        val french = app.carnet.core.text.LanguageGuess.guess(texts.joinToString(" ")) != "en"
+        lines.mapIndexed { i, l ->
+            val t = app.carnet.core.text.OcrFix.fix(texts[i].ifBlank { l.text }, french)
+            l.copy(text = t, runs = listOf(app.carnet.core.layout.StyledRun(t, Style())))
+        }
+    }
+
     /** Full pipeline for one page. [onStage] reports "reading" / "translating" / "drawing". */
-    suspend fun scan(bmp: Bitmap, onStage: (String) -> Unit = {}): ScanPage = withContext(Dispatchers.Default) {
+    suspend fun scan(bmp: Bitmap, handwriting: Boolean = false, onStage: (String) -> Unit = {}): ScanPage = withContext(Dispatchers.Default) {
         onStage("reading")
-        val (lines, angles) = lines(bmp)
+        val (found, angles) = lines(bmp)
+        val lines = if (handwriting && handwritingReady && found.isNotEmpty()) readHandwriting(bmp, found) else found
         val blocks = Layout.blocks(lines, sizeTolerance = 0.3f)
         Layout.assignRoom(blocks, { bmp.height.toFloat() - 8f }, { bmp.width.toFloat() })
         val french = blocks.joinToString("\n\n") { it.text }
