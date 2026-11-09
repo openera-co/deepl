@@ -58,7 +58,7 @@ class SmokeTest {
         // Settings → Glossary, Models, Share
         waitText("Document"); rule.onNodeWithContentDescription("Settings").performClick()
         waitText("Glossary"); rule.onAllNodesWithText("Glossary")[0].performClick(); waitText("un contrôle"); back()
-        waitText("Spelling"); rule.onAllNodesWithText("Models")[0].performScrollTo().performClick(); waitText("BUILT IN"); waitText("TRANSLATION"); back()
+        waitText("Spelling"); rule.onNodeWithText("Printed text").performScrollTo().assertIsDisplayed(); rule.onNodeWithText("Manage models").performScrollTo().performClick(); waitText("BUILT IN"); waitText("TRANSLATION"); back()
         waitText("Spelling"); rule.onNodeWithText("Share with another phone").performScrollTo().performClick(); waitText("Send"); back()
         waitText("Spelling"); rule.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
         back()

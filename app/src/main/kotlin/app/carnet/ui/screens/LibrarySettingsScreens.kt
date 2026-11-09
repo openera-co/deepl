@@ -73,6 +73,7 @@ import app.carnet.ui.SettingRow
 import app.carnet.ui.ToggleRow
 import app.carnet.ui.TopBar
 import app.carnet.ui.Type
+import app.carnet.ui.tap
 import app.carnet.ui.openItem
 import app.carnet.ui.pal
 import app.carnet.ui.tab
@@ -156,7 +157,37 @@ fun SettingsScreen(nav: NavHostController, s: AppSettings) {
             }
             SectionLabel("Models")
             Card {
-                SettingRow("Models", formatSize(ctx.app.models.installedBytes()), onClick = { nav.navigate("models") })
+                val mstatus by ctx.app.models.status.collectAsState()
+                val mcat by ctx.app.models.catalogFlow.collectAsState()
+                val shown = mcat.filter { ctx.app.models.supported(it.id) && (it.recommended || it.quality == "fast" || !it.isTranslation) }
+                shown.forEachIndexed { i, m ->
+                    if (i > 0) Divider()
+                    val st = mstatus[m.id] ?: ModelStatus.NotInstalled
+                    Row(Modifier.fillMaxWidth().tap { nav.navigate("models") }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(m.title, style = Type.bodyStrong, color = pal.ink)
+                            Text(aboutModel(m), style = Type.small, color = pal.muted)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(when (st) {
+                            ModelStatus.Installed -> "Installed"
+                            is ModelStatus.Downloading -> if (st.total > 0) "${st.done * 100 / st.total}%" else "…"
+                            ModelStatus.Verifying -> "Setting up"
+                            else -> formatSize(m.size)
+                        }, style = Type.small, fontWeight = FontWeight.SemiBold, color = if (st == ModelStatus.Installed) pal.good else pal.muted)
+                    }
+                }
+                if (shown.isNotEmpty()) Divider()
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Printed text", style = Type.bodyStrong, color = pal.ink)
+                        Text(ABOUT_PRINTED, style = Type.small, color = pal.muted)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text("Installed", style = Type.small, fontWeight = FontWeight.SemiBold, color = pal.good)
+                }
+                Divider()
+                SettingRow("Manage models", formatSize(ctx.app.models.installedBytes()), onClick = { nav.navigate("models") })
                 Divider()
                 SettingRow("Share with another phone", onClick = { nav.navigate("share") })
                 Divider()
@@ -241,18 +272,18 @@ fun ModelsScreen(nav: NavHostController, s: AppSettings) {
                 if (tr.isEmpty()) SettingRow("Connect to the internet to see the models", chevron = false)
                 tr.forEachIndexed { i, m ->
                     if (i > 0) Divider()
-                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { get(); ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) })
+                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { get(); ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) }, about = aboutModel(m))
                 }
             }
             SectionLabel("Built in")
-            Card { ModelRow("Printed text", "Included", ModelStatus.Installed, onGet = {}, onPause = {}) }
+            Card { ModelRow("Printed text", "Included", ModelStatus.Installed, onGet = {}, onPause = {}, about = ABOUT_PRINTED) }
             SectionLabel("More")
             Card {
                 val optional = catalog.filter { !it.isTranslation && ctx.app.models.supported(it.id) }
                 if (optional.isEmpty()) SettingRow("No optional models for this phone", chevron = false)
                 optional.forEachIndexed { i, m ->
                     if (i > 0) Divider()
-                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { get(); ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) })
+                    ModelRow(m.title, formatSize(m.size), status[m.id] ?: ModelStatus.NotInstalled, onGet = { get(); ctx.app.models.download(m.id) }, onPause = { ctx.app.models.pause(m.id) }, onDelete = { ctx.app.models.delete(m.id) }, about = aboutModel(m))
                 }
             }
             Spacer(Modifier.height(12.dp))

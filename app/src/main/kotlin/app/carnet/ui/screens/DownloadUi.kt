@@ -211,3 +211,17 @@ fun NeedsModelNote(dir: String, onModels: () -> Unit) {
     }
 }
 
+
+/** One short line on what a model is for. */
+fun aboutModel(m: app.carnet.models.ModelSpec): String = when {
+    m.direction == "fr-en" && m.quality == "fast" -> "French into English. Smaller and about twice as fast, a little less accurate."
+    m.direction == "en-fr" && m.quality == "fast" -> "English into French. Smaller and about twice as fast, a little less accurate."
+    m.direction == "fr-en" -> "Translates French text, photos, documents and dictation into English. Best quality."
+    m.direction == "en-fr" -> "Translates English into French. Best quality."
+    m.id == "handwriting" -> "Reads handwriting in photos and polishes hard sentences. Large and slower."
+    m.id == "whisper-small" -> "Re-listens to recordings after you stop for a cleaner transcript. Quick."
+    m.id == "whisper-turbo" -> "Re-listens to recordings after you stop. Most accurate, slower."
+    else -> m.purpose
+}
+
+const val ABOUT_PRINTED = "Reads printed text in photos and scans. Built into the app."

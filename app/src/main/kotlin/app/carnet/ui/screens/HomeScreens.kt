@@ -134,13 +134,15 @@ fun StatusRow(label: String, value: String, ok: Boolean) {
 }
 
 @Composable
-fun ModelRow(title: String, size: String, st: ModelStatus, onGet: () -> Unit, onPause: () -> Unit, onDelete: (() -> Unit)? = null) {
+fun ModelRow(title: String, size: String, st: ModelStatus, onGet: () -> Unit, onPause: () -> Unit, onDelete: (() -> Unit)? = null, about: String? = null) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(title, style = Type.bodyStrong, color = pal.ink)
+                if (about != null) Text(about, style = Type.small, color = pal.muted)
                 Text(when (st) {
-                    is ModelStatus.Downloading -> "${formatSize(st.done)} of ${formatSize(st.total)}"
+                    is ModelStatus.Downloading -> st.waiting ?: ("${formatSize(st.done)} of ${formatSize(st.total)}" + if (st.speed > 0) " · ${app.carnet.models.DownloadService.fmt(st.speed)}/s" else "")
+                    ModelStatus.Installed -> if (onDelete != null) "Installed · $size" else size
                     is ModelStatus.Failed -> st.reason
                     ModelStatus.Verifying -> "Checking…"
                     else -> size
