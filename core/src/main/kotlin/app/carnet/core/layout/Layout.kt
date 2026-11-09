@@ -187,9 +187,11 @@ object Layout {
         val room = block.maxBottom - block.top
         var size = block.fontSize
         var lines = wrap(words, maxW, size, m)
-        while (size > block.fontSize * minScale) {
+        // Shrink to fit the room; below minScale only if the text would otherwise leave the page.
+        while (size > block.fontSize * 0.4f) {
             val h = (lines.size - 1) * size * ratio + size
             if (h <= max(block.height, room) + 0.5f) break
+            if (size <= block.fontSize * minScale && h <= room + block.lineHeight * 1.5f) break
             size *= 0.95f
             lines = wrap(words, maxW, size, m)
         }

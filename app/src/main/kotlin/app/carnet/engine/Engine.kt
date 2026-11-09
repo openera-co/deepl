@@ -36,8 +36,9 @@ class Engine(private val context: Context) {
     private val decodeLock = Mutex()
     @Volatile var error: String? = null; private set
 
-    /** Interactive typing uses beam 1 (fast); documents can opt into beam 4 ("Careful" quality). */
+    /** Interactive typing always uses beam 1 (fast); documents use [docBeam] (4 = "Careful" quality). */
     @Volatile var beam = 1
+    @Volatile var docBeam = 1
 
     val modelDir: File get() = File(context.filesDir, "models/opus-fr-en")
 
@@ -106,6 +107,10 @@ class Engine(private val context: Context) {
     /** Exclusive access for long jobs (documents) that call the translator many times. */
     suspend fun <T> exclusive(block: suspend (TextTranslator) -> T): T {
         val tr = translator()
-        return decodeLock.withLock { withContext(Dispatchers.Default) { block(tr) } }
+        return decodeLock.withLock {
+            val old = beam
+            beam = docBeam
+            try { withContext(Dispatchers.Default) { block(tr) } } finally { beam = old }
+        }
     }
 }

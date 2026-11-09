@@ -41,6 +41,6 @@ val bench by tasks.registering(JavaExec::class) {
 
 val dbg by tasks.registering(JavaExec::class) {
     classpath = sourceSets["test"].runtimeClasspath
-    mainClass.set("app.carnet.core.dbg.DbgKt")
+    mainClass.set(project.findProperty("dbgMain") as String? ?: "app.carnet.core.dbg.DbgKt")
     args = (project.findProperty("dbgArgs") as String? ?: "").split(" ").filter { it.isNotBlank() }
 }

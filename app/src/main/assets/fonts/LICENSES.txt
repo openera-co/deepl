@@ -1,0 +1,9 @@
+Bundled fonts (used to render translated PDFs, photos and conversions):
+
+- Carlito (metric-compatible with Calibri) — SIL Open Font License 1.1
+- Liberation Sans / Serif / Mono (metric-compatible with Arial / Times New Roman / Courier New) — SIL Open Font License 1.1
+- DejaVu Sans (fallback for symbols and accents) — Bitstream Vera / DejaVu license (free, permissive)
+
+Translation model: Helsinki-NLP Opus-MT fr-en (Marian NMT), CC-BY 4.0, by the University of Helsinki
+(Tiedemann & Thottingal, "OPUS-MT — Building open translation services for the World", EAMT 2020).
+Optional downloads: TranslateGemma 4B (Gemma Terms of Use, Google), Whisper (MIT, OpenAI).

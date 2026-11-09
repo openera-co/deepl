@@ -39,7 +39,8 @@ class CarnetApp : Application() {
             val s = settings.flow.first()
             engine.start(s.glossary, s.spelling)
             // Keep the engine in sync with glossary/spelling edits.
-            settings.flow.map { it.glossary to it.spelling }.distinctUntilChanged().collect { (g, sp) ->
+            settings.flow.map { Triple(it.glossary, it.spelling, it.quality) }.distinctUntilChanged().collect { (g, sp, q) ->
+                engine.docBeam = if (q == "careful") 4 else 1
                 engine.setGlossary(g); engine.setSpelling(sp)
             }
         }

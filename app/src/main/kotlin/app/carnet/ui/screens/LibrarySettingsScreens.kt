@@ -135,7 +135,7 @@ fun SettingsScreen(nav: NavHostController, s: AppSettings) {
                 Divider()
                 SettingRow("Spelling", chevron = false) { Segmented(listOf("UK", "US"), if (s.spelling == "US") 1 else 0, Modifier.width(120.dp)) { i -> set { it.copy(spelling = if (i == 1) "US" else "UK") } } }
                 Divider()
-                SettingRow("Documents", chevron = false) { Segmented(listOf("Fast", "Careful"), if (s.quality == "careful") 1 else 0, Modifier.width(170.dp)) { i -> set { it.copy(quality = if (i == 1) "careful" else "fast") }; ctx.app.engine.beam = if (i == 1) 4 else 1 } }
+                SettingRow("Documents", chevron = false) { Segmented(listOf("Fast", "Careful"), if (s.quality == "careful") 1 else 0, Modifier.width(170.dp)) { i -> set { it.copy(quality = if (i == 1) "careful" else "fast") } } }
             }
             SectionLabel("Files")
             Card {

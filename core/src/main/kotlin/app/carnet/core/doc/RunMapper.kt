@@ -88,6 +88,8 @@ object RunMapper {
                 if (at >= 0) { found = at until at + c.length; break }
             }
             if (found == null) found = s.translated?.let { fuzzy(t, it, cursor) }
+            // Punctuation/number spans that can't be located simply keep the surrounding style.
+            if (found == null && !Segmenter.isLinguistic(core)) continue
             if (found == null) {
                 // Proportional projection, snapped to word boundaries.
                 val leading = s.text.length - s.text.trimStart().length
@@ -144,7 +146,7 @@ object RunMapper {
     private fun findWord(hay: String, needle: String, from: Int): Int {
         var i = hay.indexOf(needle, from, ignoreCase = true)
         while (i >= 0) {
-            val before = i == 0 || !hay[i - 1].isLetterOrDigit()
+            val before = i == 0 || !hay[i - 1].isLetterOrDigit() || !needle.first().isLetterOrDigit()
             val endIdx = i + needle.length
             val after = endIdx >= hay.length || !hay[endIdx].isLetterOrDigit() || !needle.last().isLetterOrDigit()
             if (before && after) return i

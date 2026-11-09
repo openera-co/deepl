@@ -21,6 +21,7 @@ fun main(args: Array<String>) {
         "fidelity" -> fidelity(args.drop(1))
         "mt" -> mt(args.drop(1))
         "convert" -> convert(args.drop(1))
+        "images" -> images(args.drop(1))
         else -> error("usage: fidelity|mt …")
     }
 }
@@ -40,6 +41,28 @@ private fun mt(a: List<String>) {
     val sec = (System.nanoTime() - t0) / 1e9
     File(a[2]).writeText(out.joinToString("\n") + "\n")
     println("translated ${src.size} lines in ${"%.1f".format(sec)} s → ${"%.1f".format(src.size / sec)} lines/s, ${"%.0f".format(src.sumOf { it.length } / sec)} chars/s")
+}
+
+private fun images(a: List<String>) {
+    val corpus = File(a[0]); val outDir = File(a[1]).also { it.mkdirs() }
+    val spec = a[2]; val limit = a.getOrNull(3)?.toInt() ?: Int.MAX_VALUE; val keep = a.getOrNull(4)?.toInt() ?: 20
+    val engine = engineFor(spec)
+    val files = listOf("jpg", "png").flatMap { t -> (File(corpus, t).listFiles { f -> f.extension == t }?.sortedBy { it.name } ?: emptyList()).take(limit) }
+    val pool = Executors.newFixedThreadPool(if (spec == "fake") Runtime.getRuntime().availableProcessors() else 1)
+    val res = files.mapIndexed { i, f -> pool.submit<Triple<File, Long, Any>> {
+        try { val tr = TextTranslator(engine); val (ms, c) = ImageBench.run(f, if (i < keep) File(outDir, f.nameWithoutExtension + ".en.jpg") else null, tr); Triple(f, ms, c) }
+        catch (e: Throwable) { Triple(f, 0L, e.toString() + " @ " + e.stackTrace.take(3).joinToString(" < ")) }
+    } }.map { it.get() }
+    pool.shutdown()
+    val crashes = res.filter { it.third is String }
+    @Suppress("UNCHECKED_CAST") val fails = res.filter { it.third is List<*> && (it.third as List<Check>).any { c -> !c.ok } }
+    val ms = res.map { it.second }.sorted()
+    val sb = StringBuilder("images: ${res.size}, ${res.size - crashes.size - fails.size} ok, ${crashes.size} crashed, median ${ms[ms.size / 2]} ms\n")
+    @Suppress("UNCHECKED_CAST") fails.flatMap { r -> (r.third as List<Check>).filter { !it.ok }.map { it.name to "${r.first.name}: ${it.detail}" } }.groupBy({ it.first }, { it.second })
+        .forEach { (n, ex) -> sb.append("   ✗ $n: ${ex.size} e.g. ${ex.take(3)}\n") }
+    crashes.take(3).forEach { sb.append("   ! ${it.first.name}: ${it.third}\n") }
+    println(sb); File(outDir, "summary.txt").writeText(sb.toString())
+    if (engine is MarianSentenceTranslator) System.exit(0)
 }
 
 private fun convert(a: List<String>) {
