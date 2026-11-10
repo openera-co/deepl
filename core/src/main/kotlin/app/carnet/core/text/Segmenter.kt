@@ -54,10 +54,13 @@ object Segmenter {
 
     private val word = Regex("\\p{L}[\\p{L}'’-]*\\p{L}")
     private const val MATH = "=+×÷/<>≤≥^_∑Σ√∫·→≠≈±∈∀∃∞"
+    private val unitSlash = Regex("(?<=[\\p{L}\\d)])/(?=[\\p{L}\\d(])")
 
     /** A formula with a few words around it ("Moyenne = 25 / 5 = 5 jours", "x̄ = Σ xᵢ pour i = 1 … N"). */
     fun isFormulaLine(t: String): Boolean {
-        if (t.none { it in MATH }) return false
+        // A slash inside a unit ("mL/h", "km/h", "m/s²") or a date isn't maths.
+        val u = t.replace(unitSlash, "")
+        if (u.none { it in MATH }) return false
         val words = word.findAll(t).map { it.value }.filter { it.length >= 3 }.toList()
         if (words.isEmpty() || words.size > 3) return false
         val nonSpace = t.count { !it.isWhitespace() }

@@ -33,6 +33,9 @@ object SchoolTerms {
         Term("classe de seconde", "Year 11 class"), Term("classe de première", "Year 12 class"), Term("classe de terminale", "Year 13 class"),
         Term("en terminale", "in Year 13"), Term("en première", "in Year 12"), Term("en seconde", "in Year 11"),
         Term("hockey sur gazon", "field hockey"), Term("fonction affine", "linear function"), Term("fonctions affines", "linear functions"),
+        Term("équation bilan", "overall equation"), Term("équations bilans", "overall equations"), Term("Équation bilan", "Overall equation"),
+        Term("dégagement gazeux", "release of gas"), Term("dégagement régulier", "steady release"), Term("dégagement important", "large release"),
+        Term("dégagement de dioxygène", "release of oxygen"), Term("dégagement de dihydrogène", "release of hydrogen"),
         Term("berline", "sedan"), Term("berlines", "sedans"), Term("contrôle de gestion", "management control"),
     )
 
