@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,20 +74,18 @@ fun rememberStartDownload(start: () -> Unit): () -> Unit {
  * size and speed. Hidden once installed.
  */
 @Composable
-fun GetTranslationCard(modifier: Modifier = Modifier, onShare: (() -> Unit)? = null) {
+fun GetTranslationCard(modifier: Modifier = Modifier, quality: String = "best", onShare: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     val mm = ctx.app.models
     val status by mm.status.collectAsState()
     val catalog by mm.catalogFlow.collectAsState()
-    val pack = catalog.filter { it.recommended }
+    val pack = remember(catalog, quality) { mm.pack(quality) }
     val missing = pack.filter { status[it.id] !is ModelStatus.Installed }
-    val start = rememberStartDownload { mm.downloadRecommended() }
+    val start = rememberStartDownload { mm.downloadRecommended(quality) }
     AnimatedVisibility(missing.isNotEmpty() || pack.isEmpty(), modifier, enter = expandVertically() + fadeIn(), exit = shrinkVertically(tween(260)) + fadeOut()) {
         Card(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
             if (pack.isEmpty()) {
-                Text("Translation", style = Type.bodyStrong, color = pal.ink)
-                Spacer(Modifier.height(4.dp))
-                Text("Connect to the internet once to get the model, or receive it from another phone.", style = Type.small, color = pal.muted)
+                Text("Go online once to set up", style = Type.bodyStrong, color = pal.ink)
                 if (onShare != null) { Spacer(Modifier.height(12.dp)); Btn("Get from another phone", Modifier.fillMaxWidth(), kind = BtnKind.Soft, icon = Ic.Qr, onClick = onShare) }
                 return@Card
             }
@@ -99,6 +98,8 @@ fun GetTranslationCard(modifier: Modifier = Modifier, onShare: (() -> Unit)? = n
             val waiting = sts.firstNotNullOfOrNull { (it as? ModelStatus.Downloading)?.waiting }
             val failed = sts.firstNotNullOfOrNull { (it as? ModelStatus.Failed)?.reason }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(pal.accentSoft), contentAlignment = Alignment.Center) { Icon(Ic.Download, null, tint = pal.accent, modifier = Modifier.size(20.dp)) }
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("French ⇄ English", style = Type.bodyStrong, color = pal.ink)
                     AnimatedContent(when {
@@ -113,7 +114,7 @@ fun GetTranslationCard(modifier: Modifier = Modifier, onShare: (() -> Unit)? = n
                 }
                 when {
                     active -> IconBtn(Ic.Pause, "Pause", tint = pal.accent, bg = pal.accentSoft, size = 40.dp) { missing.forEach { mm.pause(it.id) } }
-                    else -> Btn(if (paused || failed != null) "Resume" else "Download", height = 40.dp, icon = Ic.Download, onClick = start)
+                    else -> Btn(if (paused || failed != null) "Resume" else "Get", height = 40.dp, onClick = start)
                 }
             }
             AnimatedVisibility(active || paused) {
@@ -146,8 +147,8 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                 Column(Modifier.weight(1f)) {
                     when (val s = st) {
                         is UpdateState.Available -> {
-                            Text("Carnet ${s.info.versionName}", style = Type.bodyStrong, color = pal.ink)
-                            Text(s.info.notes.lineSequence().firstOrNull()?.takeIf { it.isNotBlank() } ?: formatSize(s.info.size), style = Type.small, color = pal.muted, maxLines = 2)
+                            Text("New version", style = Type.bodyStrong, color = pal.ink)
+                            Text("${s.info.versionName} · ${formatSize(s.info.size)}", style = Type.small, color = pal.muted)
                         }
                         is UpdateState.Downloading -> {
                             Text("Updating", style = Type.bodyStrong, color = pal.ink)
@@ -212,17 +213,27 @@ fun NeedsModelNote(dir: String, onModels: () -> Unit) {
 }
 
 
-/** One short line on what a model is for. */
+/** One short line on what a model is for (shown when a row is tapped). */
 fun aboutModel(m: app.carnet.models.ModelSpec): String = when {
-    m.direction == "fr-en" && m.quality == "fast" -> "French into English. Smaller and about twice as fast, a little less accurate."
-    m.direction == "en-fr" && m.quality == "fast" -> "English into French. Smaller and about twice as fast, a little less accurate."
-    m.direction == "fr-en" -> "Translates French text, photos, documents and dictation into English. Best quality."
-    m.direction == "en-fr" -> "Translates English into French. Best quality."
-    m.id == "htr-fr" -> "Reads handwritten French notes in photos. Small and quick."
-    m.id == "handwriting" -> "Reads difficult handwriting in photos and polishes hard sentences. Large and slower."
-    m.id == "whisper-small" -> "Re-listens to recordings after you stop for a cleaner transcript. Quick."
-    m.id == "whisper-turbo" -> "Re-listens to recordings after you stop. Most accurate, slower."
-    else -> m.purpose
+    m.direction != null && m.quality == "fast" -> "Smaller and about twice as fast, a little less accurate."
+    m.direction != null -> "Most accurate. Used for text, photos, documents and dictation."
+    m.id == "htr-fr" -> "Reads handwritten French notes in photos."
+    m.id == "handwriting" -> "Reads difficult handwriting and polishes hard sentences. Large and slower."
+    m.id == "whisper-small" -> "Listens to a recording again after you stop, for a cleaner transcript."
+    m.id == "whisper-turbo" -> "The most accurate cleanup of recordings. Slower."
+    else -> ""
 }
 
-const val ABOUT_PRINTED = "Reads printed text in photos and scans. Built into the app."
+fun modelIcon(m: app.carnet.models.ModelSpec) = when {
+    m.direction != null -> Ic.Translate
+    m.id.startsWith("whisper") -> Ic.Mic
+    else -> Ic.Pen
+}
+
+fun modelTitle(m: app.carnet.models.ModelSpec) = when {
+    m.direction == "fr-en" -> "French → English"
+    m.direction == "en-fr" -> "English → French"
+    else -> m.title
+}
+
+const val ABOUT_PRINTED = "Reads printed text in photos and scans."

@@ -67,6 +67,7 @@ class Jobs(private val context: Context) {
         states[id] = flow
         val cancel = AtomicBoolean(false); cancels[id] = cancel
         running[id] = context.app.scope.launch {
+            val timing = app.carnet.diag.Diag.timing("translate.document")
             try {
                 val lib = context.app.library
                 val dir = lib.dir(id)
@@ -127,6 +128,7 @@ class Jobs(private val context: Context) {
                         // Old .doc files come back as .docx (and mislabelled files as what they really are).
                         stats.outputExtension?.takeIf { it != ext }?.let { e -> File(dir, "result.$e").also { out.renameTo(it); out = it } }
                         meta["paragraphs"] = stats.paragraphs.toString()
+                        meta["target"] = context.app.engine.resolve(sample).substringAfter('-')
                         resultName = if ((saveAsPdf ?: (settings.saveAs == "pdf")) && fmt != DocFormat.TXT) {
                             flow.value = flow.value.copy(stage = "Making PDF")
                             val pdf = File(dir, "result.pdf")
@@ -135,10 +137,13 @@ class Jobs(private val context: Context) {
                         } else out.name
                     }
                 }
+                timing.tag("type", ext).measure("bytes", src.length()).measure("paragraphs", meta["paragraphs"]?.toIntOrNull() ?: 0).measure("pages", meta["pages"]?.toIntOrNull() ?: 0).ok()
                 lib.put(LibraryItem(id, ItemType.DOCUMENT, englishName, System.currentTimeMillis(), src.name, resultName, meta))
                 flow.value = flow.value.copy(stage = "Done", done = flow.value.total, finished = true, resultId = id)
             } catch (e: Throwable) {
-                val msg = if (e is InterruptedException || cancel.get()) "Cancelled" else friendly(e)
+                timing.fail(e)
+                val msg = if (e is InterruptedException || cancel.get()) "Cancelled" else app.carnet.diag.Diag.friendly(e, "translate this file")
+                if (!cancel.get()) app.carnet.diag.Diag.report(e, "translate.document", mapOf("type" to name.substringAfterLast('.', "?").lowercase()))
                 flow.value = flow.value.copy(error = msg, finished = true)
                 context.app.library.dir(id).takeIf { context.app.library.get(id) == null }?.deleteRecursively()
             } finally {
@@ -194,23 +199,10 @@ class Jobs(private val context: Context) {
                 context.app.library.put(item)
                 flow.value = flow.value.copy(stage = "Done", finished = true, resultId = item.id, done = flow.value.total)
             } catch (e: Throwable) {
-                flow.value = flow.value.copy(error = if (cancel.get()) "Cancelled" else friendly(e), finished = true)
+                flow.value = flow.value.copy(error = if (cancel.get()) "Cancelled" else app.carnet.diag.Diag.friendly(e, "finish this"), finished = true)
             } finally { running.remove(id) }
         }
         return id
     }
 
-    /** Errors in words a person can act on. */
-    private fun friendly(e: Throwable): String {
-        val m = e.message ?: ""
-        return when {
-            e is app.carnet.engine.Engine.NoModelException -> m
-            e is OutOfMemoryError -> "This file is too large for this phone's memory"
-            m.contains("End-of-File") || m.contains("Header doesn't contain versioninfo") || m.contains("zip", true) && m.contains("END header", true) || m.contains("not a zip", true) ->
-                "This file is empty or damaged"
-            m.contains("password", true) || m.contains("encrypt", true) -> "This file is password-protected"
-            m.isNotBlank() -> m
-            else -> "Couldn't translate this file (${e.javaClass.simpleName})"
-        }
-    }
 }

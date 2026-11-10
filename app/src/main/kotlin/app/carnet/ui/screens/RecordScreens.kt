@@ -121,12 +121,13 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
             // Idle: big record button + previous recordings.
             Column(Modifier.weight(1f).padding(horizontal = 20.dp)) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(96.dp).clip(CircleShape).background(Color(0xFFD92D20)).tap(haptic = true, scaleTo = 0.9f) { start() }, contentAlignment = Alignment.Center) {
-                        Icon(Ic.Mic, "Start recording", tint = Color.White, modifier = Modifier.size(40.dp))
+                    app.carnet.ui.PulseRings(Color(0xFFD92D20), 96.dp) {
+                        Box(Modifier.size(96.dp).clip(CircleShape).background(Color(0xFFD92D20)).tap(haptic = true, scaleTo = 0.9f) { start() }, contentAlignment = Alignment.Center) {
+                            Icon(Ic.Mic, "Start recording", tint = Color.White, modifier = Modifier.size(40.dp))
+                        }
                     }
-                    Spacer(Modifier.height(14.dp))
-                    Text("Start", fontWeight = FontWeight.SemiBold, color = pal.ink, fontSize = 16.sp)
-                    if (!Recorder.available(ctx)) Text("No speech recogniser found. Recording will save audio only.", style = Type.small, color = pal.muted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+                    Text("Tap to record", fontWeight = FontWeight.SemiBold, color = pal.ink, fontSize = 16.sp)
+                    if (!Recorder.available(ctx)) Text("Audio only on this phone", style = Type.small, color = pal.muted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
                 }
                 val recs = recordings.filter { it.type == ItemType.RECORDING }
                 if (recs.isEmpty()) EmptyState(Ic.Mic, "No recordings yet")
@@ -138,7 +139,7 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                 }
             }
         } else {
-            Segmented(listOf("French", "English", "Both"), show, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) { show = it }
+            Segmented(listOf("Original", "Translation", "Both"), show, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) { show = it }
             Box(Modifier.weight(1f).padding(horizontal = 20.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(pal.surface)) {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     itemsIndexed(st.segments) { _, s -> SegmentView(s, show) }
@@ -148,15 +149,9 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                     }
                 }
             }
-            // Level meter.
-            Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 28.dp), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-                val lv = st.levels.takeLast(40)
-                for (i in 0 until 40) {
-                    val v = lv.getOrNull(i - (40 - lv.size)) ?: 0f
-                    val h by animateFloatAsState(4f + v * 44f, spring(stiffness = 600f), label = "lv$i")
-                    Box(Modifier.width(4.dp).height(h.dp).clip(CircleShape).background(if (st.paused) pal.line else pal.accent))
-                }
-            }
+            // Live sound wave.
+            app.carnet.ui.SoundWave(st.level, active = !st.paused, modifier = Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 20.dp),
+                color = if (st.paused) pal.muted else pal.accent)
             Row(Modifier.fillMaxWidth().height(96.dp).padding(horizontal = 44.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconBtn(Ic.Mark, "Mark this moment", size = 52.dp, border = true, bg = pal.surface) { Recorder.mark() }
                 Box(Modifier.size(76.dp).clip(CircleShape).background(Color(0xFFD92D20)).tap(haptic = true, scaleTo = 0.9f) {

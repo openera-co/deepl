@@ -41,6 +41,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -171,15 +174,16 @@ fun JobScreen(nav: NavHostController, id: String) {
                 Text(s, style = Type.body, color = if (st.error != null) pal.danger else pal.muted, textAlign = TextAlign.Center)
             }
             Spacer(Modifier.height(28.dp))
-            ProgressBar(if (st.total > 0) st.fraction else 0.05f)
+            val shown by animateFloatAsState(if (st.total > 0) st.fraction else 0.05f, tween(450), label = "progress")
+            ProgressBar(shown)
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth()) {
-                Text("${(st.fraction * 100).toInt()}%", style = Type.small, color = pal.muted, modifier = Modifier.weight(1f))
+                Text("${(shown * 100).toInt()}%", style = Type.small, color = pal.muted, modifier = Modifier.weight(1f))
                 st.etaSeconds?.let { Text(if (it < 60) "About $it s left" else "About ${it / 60} min left", style = Type.small, color = pal.muted) }
             }
         }
         Column(Modifier.padding(horizontal = 24.dp).navigationBarsPadding().padding(bottom = 24.dp)) {
-            if (st.finished && st.error != null) Btn("Back", Modifier.fillMaxWidth(), kind = BtnKind.Secondary) { nav.popBackStack() }
+            if (st.finished && st.error != null) Btn("Try another file", Modifier.fillMaxWidth()) { nav.popBackStack() }
             else Btn("Cancel", Modifier.fillMaxWidth(), kind = BtnKind.Secondary) { ctx.app.jobs.cancel(id); nav.popBackStack() }
         }
     }
@@ -208,8 +212,16 @@ fun DocResultScreen(nav: NavHostController, id: String) {
                 Text(item.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = pal.ink, maxLines = 1)
             }
         })
-        Segmented(listOf("Original", "English"), tab, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) { tab = it; page = 0 }
-        Box(Modifier.weight(1f).fillMaxWidth().background(pal.surfaceAlt), contentAlignment = Alignment.Center) {
+        val tgt = remember(result) { if (item.meta["target"] == "fr") "French" else "English" }
+        Segmented(listOf("Original", tgt), tab, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) { tab = it; page = 0 }
+        var drag by remember { mutableStateOf(0f) }
+        Box(Modifier.weight(1f).fillMaxWidth().background(pal.surfaceAlt).pointerInput(pageCount) {
+            // Swipe between pages.
+            detectHorizontalDragGestures(onDragEnd = {
+                if (drag < -80 && page < pageCount - 1) page++ else if (drag > 80 && page > 0) page--
+                drag = 0f
+            }) { _, d -> drag += d }
+        }, contentAlignment = Alignment.Center) {
             if (result.extension.equals("zip", true)) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 FileBadge("ZIP", size = 64.dp, fontSize = 13); Spacer(Modifier.height(12.dp))
                 Text(remember(result) { "${runCatching { java.util.zip.ZipFile(result).use { it.size() } }.getOrDefault(0)} files" }, style = Type.bodyStrong, color = pal.ink)

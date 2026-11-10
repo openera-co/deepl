@@ -58,6 +58,8 @@ android {
             isIncludeAndroidResources = true
             all {
                 it.maxHeapSize = "3g"
+                it.systemProperty("carnet.shots", (project.findProperty("carnet.shots") as String?) ?: "")
+                it.systemProperty("roborazzi.test.record", "true")
                 it.systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2")
             }
         }
@@ -128,6 +130,7 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("io.sentry:sentry-android:8.63.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.6.2")
@@ -135,5 +138,7 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.32.2")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.32.2")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

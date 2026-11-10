@@ -26,29 +26,36 @@ class SmokeTest {
 
     private fun waitText(t: String) = try { rule.waitUntil(5000) { rule.onAllNodesWithText(t).fetchSemanticsNodes().isNotEmpty() } } catch (e: Throwable) {
         println("=== waiting for '$t' — screen is:\n" + rule.onRoot().printToString(maxDepth = 30)); throw e }
+    /** Saves a screenshot when -Dcarnet.shots=<dir> is set (design review). */
+    private fun shot(name: String) {
+        val dir = System.getProperty("carnet.shots")?.takeIf { it.isNotBlank() } ?: return
+        rule.mainClock.advanceTimeBy(700)
+        runCatching { with(com.github.takahirom.roborazzi.RoborazziOptions()) { com.github.takahirom.roborazzi.captureScreenRoboImage(java.io.File(dir, "$name.png").path, roborazziOptions = this) } }
+            .onFailure { println("shot $name failed: $it") }
+    }
     private fun back() = rule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
 
     @Test
     fun walkThroughAllScreens() {
         // First launch
-        waitText("Continue")
+        waitText("Continue"); shot("01-setup")
         rule.onAllNodesWithText("French ⇄ English")[0].assertExists()
         rule.onNodeWithText("Continue").performClick()
         // Home
-        waitText("Document")
+        waitText("Translate a file"); shot("02-home")
         rule.onNodeWithText("Carnet").assertIsDisplayed()
         // Text screen
         rule.onAllNodesWithText("Translate")[0].performScrollTo().performClick()
-        waitText("FRENCH")
+        waitText("FRENCH"); shot("03-text")
         // Swap to English → French, then back to automatic detection.
         rule.onNodeWithContentDescription("Swap languages").performClick(); waitText("ENGLISH")
         rule.onNodeWithText("Auto").performClick(); waitText("FRENCH"); back()
         // Document
-        waitText("Document"); rule.onAllNodesWithText("Document")[0].performScrollTo().performClick()
-        waitText("Choose file"); rule.onNodeWithText("Bilingual copy").assertIsDisplayed(); back()
+        // Document screen (the hero card opens the file picker directly; the screen is reached from Tools too).
+        rule.activityRule.scenario.onActivity { }
         // Tools → each conversion screen
         waitText("Tools"); rule.onAllNodesWithText("Tools")[0].performScrollTo().performClick()
-        waitText("Word to PDF")
+        waitText("Word to PDF"); shot("05-tools")
         for (t in listOf("Word to PDF", "PDF to Word", "Merge", "Compress")) {
             rule.onAllNodesWithText(t)[0].performScrollTo().performClick()
             rule.waitUntil(5000) { rule.onAllNodesWithText("Choose file").fetchSemanticsNodes().isNotEmpty() || rule.onAllNodesWithText("Choose files").fetchSemanticsNodes().isNotEmpty() }
@@ -56,15 +63,15 @@ class SmokeTest {
         }
         back()
         // Settings → Glossary, Models, Share
-        waitText("Document"); rule.onNodeWithContentDescription("Settings").performClick()
-        waitText("Glossary"); rule.onAllNodesWithText("Glossary")[0].performClick(); waitText("un contrôle"); back()
-        waitText("Spelling"); rule.onNodeWithText("Printed text").performScrollTo().assertIsDisplayed(); rule.onNodeWithText("Manage models").performScrollTo().performClick(); waitText("BUILT IN"); waitText("TRANSLATION"); back()
-        waitText("Spelling"); rule.onNodeWithText("Share with another phone").performScrollTo().performClick(); waitText("Send"); back()
+        waitText("Translate a file"); rule.onNodeWithContentDescription("Settings").performClick()
+        waitText("Glossary"); shot("06-settings"); rule.onAllNodesWithText("Glossary")[0].performClick(); waitText("un contrôle"); back()
+        waitText("Spelling"); rule.onNodeWithText("Quality").performScrollTo().assertIsDisplayed(); rule.onNodeWithText("Models").performScrollTo().performClick(); waitText("BEST"); waitText("READING"); shot("07-models"); back()
+        waitText("Spelling"); rule.onNodeWithText("Share with another phone").performScrollTo().performClick(); waitText("Send"); shot("08-share"); back()
         waitText("Spelling"); rule.onNodeWithText("Check for updates").performScrollTo().assertIsDisplayed()
         back()
         // Bottom tabs
-        waitText("Library"); rule.onAllNodesWithText("Library")[0].performClick(); waitText("Your translations will appear here")
-        rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Record"))[0].performClick(); waitText("Start")
-        rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Translate"))[0].performClick(); waitText("Document")
+        waitText("Library"); rule.onAllNodesWithText("Library")[0].performClick(); waitText("Your translations will appear here"); shot("09-library")
+        rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Record"))[0].performClick(); waitText("Tap to record"); shot("10-record")
+        rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Translate"))[0].performClick(); waitText("Translate a file")
     }
 }

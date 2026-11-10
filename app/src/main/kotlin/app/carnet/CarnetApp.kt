@@ -11,6 +11,7 @@ import app.carnet.engine.Engine
 import app.carnet.jobs.Jobs
 import app.carnet.models.ModelManager
 import app.carnet.ocr.Scanner
+import app.carnet.diag.Diag
 import app.carnet.update.Updater
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.CoroutineScope
@@ -24,7 +25,7 @@ import kotlinx.coroutines.launch
 /** Process-wide singletons. Everything is created lazily so app start stays instant. */
 class CarnetApp : Application() {
     /** App-wide scope; failures are logged, never fatal. */
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> android.util.Log.e("Carnet", "background task failed", e) })
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> android.util.Log.e("Carnet", "background task failed", e); Diag.report(e, "background") })
     val settings by lazy { Settings(this) }
     val engine by lazy { Engine(this) }
     val library by lazy { Library(this) }
@@ -40,9 +41,12 @@ class CarnetApp : Application() {
         createChannels()
         scope.launch {
             val s = settings.flow.first()
+            Diag.start(this@CarnetApp, s.diagnostics)
+            engine.preferFast = s.model == "fast"
             engine.start(s.glossary, s.spelling)
             // Keep the engine in sync with glossary/spelling edits.
             launch { settings.flow.map { it.direction }.distinctUntilChanged().collect { engine.direction = it } }
+            launch { settings.flow.map { it.model }.distinctUntilChanged().collect { engine.setQuality(it == "fast") } }
             // New models and app updates (silent when offline).
             launch { models.refreshCatalog() }
             updater.check()

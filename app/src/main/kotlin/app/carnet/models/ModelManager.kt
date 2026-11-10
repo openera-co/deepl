@@ -80,14 +80,14 @@ class ModelManager(private val context: Context) {
 
     /** Models that are not translation models (fixed URLs). */
     private val extras = listOf(
-        ModelSpec("handwriting", "Handwriting & Improve", "TranslateGemma 4B", listOf(
+        ModelSpec("handwriting", "Handwriting · advanced", "", listOf(
             ModelFile("model.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf", 2489909760, "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"),
             ModelFile("vision.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.mmproj-Q8_0.gguf", 591377600, "482f68be8823dfdfb3561c22cdd1c0f617d0d5e6efe9c323cc6428a4331dba01"),
         )),
-        ModelSpec("whisper-small", "Dictation · Improve (fast)", "Whisper small", listOf(
+        ModelSpec("whisper-small", "Recording cleanup", "", listOf(
             ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", 190085487, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"),
         )),
-        ModelSpec("whisper-turbo", "Dictation · Improve (best)", "Whisper large-v3 turbo", listOf(
+        ModelSpec("whisper-turbo", "Recording cleanup · best", "", listOf(
             ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin", 574041195, "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
         )),
     )
@@ -126,6 +126,7 @@ class ModelManager(private val context: Context) {
             _catalog.value = loadCatalog()
             _status.value = catalog.associate { it.id to (_status.value[it.id]?.takeIf { s -> s !is ModelStatus.NotInstalled } ?: initialStatus(it)) }
         }
+        refreshUpdates()
     }
 
     fun spec(id: String) = catalog.first { it.id == id }
@@ -147,15 +148,77 @@ class ModelManager(private val context: Context) {
         return installed.sortedBy { if ((it.quality == "fast") == preferFast) 0 else 1 }.firstOrNull()
     }
 
-    /** What the one button downloads: the recommended models not yet installed. */
-    fun recommendedMissing(): List<ModelSpec> = catalog.filter { it.recommended && !isInstalled(it.id) && supported(it.id) }
+    /** The models the one button downloads for a quality ("best"/"fast"): both directions, plus the handwriting reader. */
+    fun pack(quality: String): List<ModelSpec> = catalog.filter { (it.direction != null && it.quality == quality) || (it.direction == null && it.recommended) }.filter { supported(it.id) }
 
-    private fun installedOk(s: ModelSpec) = s.files.isNotEmpty() && File(dir(s.id), ".ok").exists() &&
-        s.files.all { File(dir(s.id), it.name).let { f -> f.exists() && f.length() == it.size } }
+    fun recommendedMissing(quality: String = "best"): List<ModelSpec> = pack(quality).filter { !isInstalled(it.id) }
+
+    /** What is on disk (may be an older version than the catalog's). */
+    fun installedSpec(id: String): ModelSpec? = File(dir(id), "spec.json").takeIf { it.exists() && File(dir(id), ".ok").exists() }
+        ?.let { runCatching { ModelSpec.fromJson(JSONObject(it.readText())) }.getOrNull() }
+
+    private fun installedOk(s: ModelSpec): Boolean {
+        val have = installedSpec(s.id) ?: return false
+        return have.files.isNotEmpty() && have.files.all { File(dir(s.id), it.name).let { f -> f.exists() && f.length() == it.size } }
+    }
+
+    private val _updates = MutableStateFlow<Map<String, Long>>(emptyMap())
+    /** Installed models with a newer version: id → bytes to download (only the files that changed). */
+    val updates: StateFlow<Map<String, Long>> = _updates
+    private val _generation = MutableStateFlow(0)
+    /** Bumped whenever a model's files change on disk (engines reload). */
+    val generation: StateFlow<Int> = _generation
+
+    private fun changedFiles(spec: ModelSpec): List<ModelFile> {
+        val have = installedSpec(spec.id)?.files?.associate { it.name to it.sha256 } ?: return spec.files
+        return spec.files.filter { have[it.name] != it.sha256 }
+    }
+
+    private fun refreshUpdates() {
+        _updates.value = catalog.filter { isInstalled(it.id) }.mapNotNull { s -> changedFiles(s).takeIf { it.isNotEmpty() }?.let { s.id to it.sumOf { f -> f.size } } }.toMap()
+    }
+
+    /** Updates an installed model in place: downloads only the changed files, then swaps them in. */
+    fun update(id: String) {
+        if (jobs[id]?.isActive == true) return
+        val spec = specOrNull(id) ?: return
+        val changed = changedFiles(spec)
+        if (changed.isEmpty()) return
+        val total = changed.sumOf { it.size }
+        set(id, ModelStatus.Downloading(0, total, waiting = "Waiting…"))
+        DownloadService.start(context)
+        jobs[id] = context.app.scope.launch(Dispatchers.IO) {
+            try {
+                queue.withLock {
+                    val d = dir(id); var done = 0L; val meter = SpeedMeter()
+                    for (f in changed) {
+                        val part = File(d, f.name + ".new")
+                        done += part.length()
+                        awaitAllowedNetwork(id, done, total)
+                        val job = kotlin.coroutines.coroutineContext[Job]
+                        fetch(f.url, part, null, { job?.isActive != false }) { n -> done += n; set(id, ModelStatus.Downloading(done, total, speed = meter.add(n))) }
+                        if (sha256(part) != f.sha256) { part.delete(); throw IllegalStateException("damaged in transfer") }
+                    }
+                    set(id, ModelStatus.Verifying)
+                    for (f in changed) File(d, f.name + ".new").renameTo(File(d, f.name))
+                    spec.files.map { it.name }.toSet().let { keep -> d.listFiles()?.filter { it.name !in keep && it.name != ".ok" && it.name != "spec.json" }?.forEach { it.delete() } }
+                    File(d, "spec.json").writeText(spec.toJson().toString())
+                    set(id, ModelStatus.Installed)
+                    _generation.value++
+                    refreshUpdates()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                set(id, ModelStatus.Installed)
+            } catch (e: Throwable) {
+                app.carnet.diag.Diag.report(e, "model.update", mapOf("model" to id))
+                set(id, ModelStatus.Installed)
+            }
+        }
+    }
 
     private fun initialStatus(s: ModelSpec): ModelStatus = when {
         installedOk(s) -> ModelStatus.Installed
-        s.files.any { File(dir(s.id), it.name + ".part").exists() } ->
+        installedSpec(s.id) == null && s.files.any { File(dir(s.id), it.name + ".part").exists() } ->
             ModelStatus.Downloading(s.files.sumOf { f -> File(dir(s.id), f.name).takeIf { it.exists() && it.length() == f.size }?.length() ?: File(dir(s.id), f.name + ".part").length() }, s.size, paused = true)
         else -> ModelStatus.NotInstalled
     }
@@ -167,7 +230,7 @@ class ModelManager(private val context: Context) {
     val anyDownloading: Boolean get() = _status.value.values.any { it is ModelStatus.Downloading && !it.paused || it is ModelStatus.Verifying }
 
     /** One button: downloads every recommended model (translation both ways). */
-    fun downloadRecommended() { recommendedMissing().forEach { download(it.id) } }
+    fun downloadRecommended(quality: String = "best") { recommendedMissing(quality).forEach { download(it.id) } }
 
     /**
      * Downloads (or resumes) all files of a model, from its origin or from another phone ([baseUrl]).
@@ -184,7 +247,8 @@ class ModelManager(private val context: Context) {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 set(id, (initialStatus(spec) as? ModelStatus.Downloading)?.copy(paused = true) ?: ModelStatus.NotInstalled)
             } catch (e: Throwable) {
-                set(id, ModelStatus.Failed(e.message ?: "Download failed"))
+                app.carnet.diag.Diag.report(e, "model.download", mapOf("model" to id))
+                set(id, ModelStatus.Failed(app.carnet.diag.Diag.friendly(e, "download")))
             }
         }
     }
@@ -227,6 +291,7 @@ class ModelManager(private val context: Context) {
             done = currentBytes(spec)
         }
         File(d, ".ok").writeText("ok")
+        _generation.value++
         set(id, ModelStatus.Installed)
     }
 

@@ -154,7 +154,7 @@ object Recorder {
         else SpeechRecognizer.createSpeechRecognizer(appCtx)).also { recognizer = it }
         sr.setRecognitionListener(listener)
         segStart = _state.value.elapsedMs
-        try { sr.startListening(intent()) } catch (e: Exception) { _state.value = _state.value.copy(error = e.message) }
+        try { sr.startListening(intent()) } catch (e: Exception) { app.carnet.diag.Diag.report(e, "record.listen"); _state.value = _state.value.copy(error = "Speech recognition couldn't start. Audio is still being recorded.") }
     }
 
     private val listener = object : RecognitionListener {

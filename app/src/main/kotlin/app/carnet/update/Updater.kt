@@ -120,7 +120,8 @@ class Updater(private val context: Context) {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 _state.value = UpdateState.Available(info)
             } catch (e: Exception) {
-                _state.value = UpdateState.Failed(e.message ?: "Update failed")
+                app.carnet.diag.Diag.report(e, "update")
+                _state.value = UpdateState.Failed(app.carnet.diag.Diag.friendly(e, "update"))
             }
         }
     }

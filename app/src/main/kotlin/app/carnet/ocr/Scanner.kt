@@ -132,8 +132,9 @@ class Scanner(private val context: Context, private val engine: Engine) {
 
     /** Full pipeline for one page. [onStage] reports "reading" / "translating" / "drawing". */
     suspend fun scan(bmp: Bitmap, handwriting: Boolean = false, onStage: (String) -> Unit = {}): ScanPage = withContext(Dispatchers.Default) {
+        val timing = app.carnet.diag.Diag.timing("scan.page").tag("handwriting", handwriting.toString())
         onStage("reading")
-        val (found, angles) = lines(bmp)
+        val (found, angles) = timing.span("ocr") { kotlinx.coroutines.runBlocking { lines(bmp) } }
         val lines = if (handwriting && handwritingReady && found.isNotEmpty()) readHandwriting(bmp, found) else found
         val blocks = Layout.blocks(lines, sizeTolerance = 0.3f)
         Layout.assignRoom(blocks, { bmp.height.toFloat() - 8f }, { bmp.width.toFloat() })
@@ -144,6 +145,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val trMap = HashMap<Block, String>(); ling.forEachIndexed { i, b -> trMap[b] = english[i] }
         onStage("drawing")
         val out = render(bmp, blocks, trMap, if (angles.isEmpty()) 0f else angles.sorted()[angles.size / 2])
+        timing.measure("lines", lines.size).measure("pixels", bmp.width.toLong() * bmp.height).ok()
         ScanPage(bmp, out, french, blocks.joinToString("\n\n") { trMap[it] ?: it.text }, blocks.size)
     }
 

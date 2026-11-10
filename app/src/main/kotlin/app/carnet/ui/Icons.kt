@@ -63,6 +63,9 @@ object Ic {
     val Qr = icon("qr", rect(3f, 3f, 7f, 7f, 1f), rect(14f, 3f, 7f, 7f, 1f), rect(3f, 14f, 7f, 7f, 1f), "M14 14h3v3h-3z", "M20 14v1", "M14 20h1", "M18 18h3v3")
     val Download = Save
     val Model = icon("model", rect(4f, 4f, 16f, 16f, 3f), "M9 9h6v6H9z", "M9 2v2", "M15 2v2", "M9 20v2", "M15 20v2", "M2 9h2", "M2 15h2", "M20 9h2", "M20 15h2")
+    val Pen = icon("pen", "M4 20c2-1 3-3 4-5s3-6 5-6 1 4 3 4 2-3 4-3", "M4 20h3")
+    val Bolt = icon("bolt", "M13 3L5 14h6l-1 7 8-11h-6z")
+    val Shield = icon("shield", "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z", "M9 12l2 2 4-4")
     val Edit = icon("edit", "M4 20h4L19 9l-4-4L4 16z", "M13 7l4 4")
     val Swap = icon("swap", "M7 4l-3 3 3 3", "M4 7h13", "M17 20l3-3-3-3", "M20 17H7")
     val Info = icon("info", circle(12f, 12f, 9f), "M12 11v5", "M12 8v.01")

@@ -39,7 +39,7 @@ class Engine(private val context: Context) {
     val state: StateFlow<State> = _state
     @Volatile var error: String? = null; private set
 
-    private class Loaded(val modelId: String, val model: MarianModel, val translator: TextTranslator)
+    private class Loaded(val modelId: String, val model: MarianModel, val translator: TextTranslator, val generation: Int)
     private val loaded = HashMap<String, Loaded>()
     private val loadLock = Mutex()
     private val decodeLock = Mutex()
@@ -53,16 +53,25 @@ class Engine(private val context: Context) {
     private var glossary: List<GlossaryEntry> = emptyList()
     private var spelling = "UK"
 
+    /** Switches between the best and the fast models (reloads what's in memory). */
+    suspend fun setQuality(fast: Boolean) {
+        if (preferFast == fast) return
+        preferFast = fast
+        loadLock.withLock { loaded.values.forEach { it.model.close() }; loaded.clear() }
+        refreshStates()
+        for (dir in listOf(FR_EN, EN_FR)) if (context.app.models.translationModel(dir, preferFast) != null) scope.launch { runCatching { translator(dir) } }
+    }
+
     fun start(glossary: List<GlossaryEntry>, spelling: String) {
         this.glossary = glossary; this.spelling = spelling
         refreshStates()
         // Load (or reload) a direction as soon as its model is installed, updated or removed.
         scope.launch {
-            context.app.models.status.map { st -> st.filterValues { it is ModelStatus.Installed }.keys }.distinctUntilChanged().collect {
+            kotlinx.coroutines.flow.combine(context.app.models.status.map { st -> st.filterValues { it is ModelStatus.Installed }.keys }, context.app.models.generation) { k, g -> k to g }.distinctUntilChanged().collect {
                 loadLock.withLock {
                     for (dir in listOf(FR_EN, EN_FR)) {
                         val want = context.app.models.translationModel(dir, preferFast)?.id
-                        if (loaded[dir]?.modelId != want) loaded.remove(dir)?.model?.close()
+                        if (loaded[dir]?.modelId != want || loaded[dir]?.generation != it.second) loaded.remove(dir)?.model?.close()
                     }
                 }
                 refreshStates()
@@ -111,6 +120,7 @@ class Engine(private val context: Context) {
             _states.value = _states.value + (dir to State.Loading); refreshStates()
             try {
                 withContext(Dispatchers.Default) {
+                    val timing = app.carnet.diag.Diag.timing("model.load").tag("model", spec.id)
                     val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
                     val m = MarianModel(DirectorySource(context.app.models.dir(spec.id)), threads = threads)
                     val sentence = object : SentenceTranslator {
@@ -124,12 +134,14 @@ class Engine(private val context: Context) {
                     if (tgt == "en") tr.spelling = spelling
                     // Warm-up: the first ONNX Runtime run allocates arenas.
                     tr.translate(if (src == "fr") "Bonjour." else "Hello.")
-                    loaded[dir] = Loaded(spec.id, m, tr)
+                    loaded[dir] = Loaded(spec.id, m, tr, context.app.models.generation.value)
+                    timing.ok()
                     error = null
                     tr
                 }
             } catch (t: Throwable) {
                 Log.e("Carnet", "engine $dir failed", t)
+                app.carnet.diag.Diag.report(t, "model.load", mapOf("direction" to dir, "model" to spec.id))
                 error = t.message
                 _states.value = _states.value + (dir to State.Failed)
                 throw t

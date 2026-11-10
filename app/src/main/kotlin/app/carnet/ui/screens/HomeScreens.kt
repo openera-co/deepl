@@ -82,6 +82,11 @@ import app.carnet.ui.tap
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.border
+import androidx.compose.animation.animateContentSize
+import app.carnet.ui.enter
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -105,21 +110,10 @@ fun SetupScreen(nav: NavHostController) {
         }
         Column(Modifier.padding(horizontal = 20.dp).navigationBarsPadding().padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             GetTranslationCard(onShare = { nav.navigate("share") })
-            Card {
-                StatusRow("Translation", when (engine) { Engine.State.Ready -> "Ready"; Engine.State.Loading -> "Preparing…"; Engine.State.Failed -> "Error"; Engine.State.NoModel -> "Not downloaded" }, engine == Engine.State.Ready)
-                Divider()
-                StatusRow("Printed text", "Ready", true)
-                for (id in listOf("handwriting", "whisper-small").filter { ctx.app.models.supported(it) }) {
-                    Divider()
-                    val spec = ctx.app.models.spec(id)
-                    ModelRow(spec.title, formatSize(spec.size), models[id] ?: ModelStatus.NotInstalled, onGet = { ctx.app.models.download(id) }, onPause = { ctx.app.models.pause(id) })
-                }
-            }
             Btn("Continue", Modifier.fillMaxWidth(), height = 54.dp) {
                 scope.launch { ctx.app.settings.update { it.copy(setupDone = true) } }
                 nav.navigate("home") { popUpTo("setup") { inclusive = true } }
             }
-            Btn("Import from file", Modifier.fillMaxWidth(), kind = BtnKind.Ghost) { nav.navigate("models") }
         }
     }
 }
@@ -134,28 +128,40 @@ fun StatusRow(label: String, value: String, ok: Boolean) {
 }
 
 @Composable
-fun ModelRow(title: String, size: String, st: ModelStatus, onGet: () -> Unit, onPause: () -> Unit, onDelete: (() -> Unit)? = null, about: String? = null) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+fun ModelRow(title: String, size: String, st: ModelStatus, onGet: () -> Unit, onPause: () -> Unit, onDelete: (() -> Unit)? = null, about: String? = null,
+             icon: androidx.compose.ui.graphics.vector.ImageVector? = null, updateBytes: Long = 0, onUpdate: (() -> Unit)? = null) {
+    var open by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().then(if (about != null) Modifier.tap(scaleTo = 1f) { open = !open } else Modifier).padding(horizontal = 16.dp, vertical = 12.dp).animateContentSize()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (icon != null) {
+                Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(if (st == ModelStatus.Installed) pal.goodSoft else pal.accentSoft), contentAlignment = Alignment.Center) {
+                    Icon(icon, null, tint = if (st == ModelStatus.Installed) pal.good else pal.accent, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text(title, style = Type.bodyStrong, color = pal.ink)
-                if (about != null) Text(about, style = Type.small, color = pal.muted)
                 Text(when (st) {
                     is ModelStatus.Downloading -> st.waiting ?: ("${formatSize(st.done)} of ${formatSize(st.total)}" + if (st.speed > 0) " · ${app.carnet.models.DownloadService.fmt(st.speed)}/s" else "")
-                    ModelStatus.Installed -> if (onDelete != null) "Installed · $size" else size
                     is ModelStatus.Failed -> st.reason
-                    ModelStatus.Verifying -> "Checking…"
+                    ModelStatus.Verifying -> "Setting up…"
+                    ModelStatus.Installed -> if (updateBytes > 0) "Update · ${formatSize(updateBytes)}" else size
                     else -> size
                 }, style = Type.small, color = if (st is ModelStatus.Failed) pal.danger else pal.muted)
             }
             when (st) {
-                ModelStatus.Installed -> if (onDelete != null) IconBtn(Ic.Delete, "Delete $title", tint = pal.muted, onClick = onDelete) else Text("Ready", fontWeight = FontWeight.SemiBold, color = pal.good)
+                ModelStatus.Installed -> when {
+                    updateBytes > 0 && onUpdate != null -> Btn("Update", kind = BtnKind.Soft, height = 36.dp, onClick = onUpdate)
+                    onDelete != null -> IconBtn(Ic.Delete, "Delete $title", tint = pal.muted, onClick = onDelete)
+                    else -> Icon(Ic.Check, "Ready", tint = pal.good, modifier = Modifier.size(20.dp))
+                }
                 is ModelStatus.Downloading -> if (st.paused) Btn("Resume", kind = BtnKind.Soft, height = 36.dp, onClick = onGet) else IconBtn(Ic.Pause, "Pause", tint = pal.accent, bg = pal.accentSoft, size = 40.dp, onClick = onPause)
-                ModelStatus.Verifying -> {}
-                else -> Btn("Get", kind = BtnKind.Soft, height = 36.dp, onClick = onGet)
+                ModelStatus.Verifying -> Dots(pal.accent)
+                else -> IconBtn(Ic.Download, "Download $title", tint = pal.accent, bg = pal.accentSoft, size = 40.dp, onClick = onGet)
             }
         }
         if (st is ModelStatus.Downloading) { Spacer(Modifier.height(10.dp)); app.carnet.ui.ProgressBar(if (st.total > 0) st.done.toFloat() / st.total else 0f, height = 6.dp) }
+        if (open && about != null) Text(about, style = Type.small, color = pal.muted, modifier = Modifier.padding(top = 8.dp))
     }
 }
 
@@ -196,48 +202,66 @@ fun HomeScreen(nav: NavHostController, settings: AppSettings) {
     val ctx = LocalContext.current
     val items by ctx.app.library.items.collectAsState()
     var text by remember { mutableStateOf("") }
+    // One tap: pick a file, and the translated copy is on its way.
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) { Handoff.files = listOf(uri); nav.navigate("document?auto=true") }
+    }
     Screen {
         Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(pal.accent), contentAlignment = Alignment.Center) { Icon(Ic.Logo, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
             Spacer(Modifier.width(10.dp))
             Text("Carnet", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = pal.ink, modifier = Modifier.weight(1f))
-            Row(Modifier.clip(CircleShape).background(pal.goodSoft).padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(pal.good)); Spacer(Modifier.width(6.dp))
-                Text("Offline", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = pal.good)
-            }
             IconBtn(Ic.Settings, "Settings") { nav.navigate("settings") }
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             UpdateBanner()
-            GetTranslationCard(onShare = { nav.navigate("share") })
-            Card {
+            GetTranslationCard(quality = settings.model, onShare = { nav.navigate("share") })
+            // Hero: translate a file.
+            Row(
+                Modifier.enter(0).fillMaxWidth().height(104.dp).clip(RoundedCornerShape(22.dp)).background(pal.accent)
+                    .tap(haptic = true, scaleTo = 0.97f) { pick.launch(PICK_TYPES) }.padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(pal.accentInk.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                    Icon(Ic.File, null, tint = pal.accentInk, modifier = Modifier.size(26.dp))
+                }
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Translate a file", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = pal.accentInk)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (t in listOf("PDF", "Word", "PowerPoint", "Excel")) Text(t, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = pal.accentInk,
+                            modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(pal.accentInk.copy(alpha = 0.16f)).padding(horizontal = 7.dp, vertical = 3.dp))
+                    }
+                }
+                Icon(Ic.Arrow, null, tint = pal.accentInk, modifier = Modifier.size(22.dp))
+            }
+            Row(Modifier.enter(1), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HomeTile("Scan", Ic.Camera, Modifier.weight(1f)) { nav.navigate("scan") }
+                HomeTile("Record", Ic.Mic, Modifier.weight(1f)) { nav.tab("record") }
+                HomeTile("Tools", Ic.Tools, Modifier.weight(1f)) { nav.navigate("tools") }
+            }
+            Card(Modifier.enter(2)) {
                 DirectionBar(settings, ctx.app.engine.resolve(text, if (settings.direction == "auto") null else settings.direction), Modifier.padding(horizontal = 16.dp))
                 Divider()
                 Column(Modifier.padding(16.dp)) {
-                    Box(Modifier.fillMaxWidth().heightIn(min = 120.dp)) {
+                    Box(Modifier.fillMaxWidth().heightIn(min = 84.dp)) {
                         if (text.isEmpty()) Text("Type or paste text", style = Type.input, color = pal.faint)
-                        BasicTextField(text, { text = it }, textStyle = Type.input.copy(color = pal.ink), cursorBrush = SolidColor(pal.accent), modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp))
+                        BasicTextField(text, { text = it }, textStyle = Type.input.copy(color = pal.ink), cursorBrush = SolidColor(pal.accent), modifier = Modifier.fillMaxWidth().heightIn(min = 84.dp))
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconBtn(Ic.Paste, "Paste", border = true) { paste(ctx)?.let { text = it } }
-                        Spacer(Modifier.width(8.dp))
-                        IconBtn(Ic.Mic, "Dictate", border = true) { nav.navigate("record") }
                         Spacer(Modifier.weight(1f))
-                        Btn("Translate", height = 44.dp) { Handoff.text = text; nav.navigate("text") }
+                        Btn("Translate", height = 44.dp, icon = Ic.Arrow) { Handoff.text = text; nav.navigate("text") }
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                HomeTile("Scan", Ic.Camera, Modifier.weight(1f), primary = true) { nav.navigate("scan") }
-                HomeTile("Document", Ic.File, Modifier.weight(1f)) { nav.navigate("document") }
-                HomeTile("Tools", Ic.Tools, Modifier.weight(1f)) { nav.navigate("tools") }
-            }
             if (items.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.enter(3).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Recent", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = pal.ink, modifier = Modifier.weight(1f))
                     Text("See all", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = pal.accent, modifier = Modifier.tap { nav.tab("library") }.padding(8.dp))
                 }
-                Column {
+                Column(Modifier.enter(3)) {
                     items.take(4).forEachIndexed { i, it ->
                         if (i > 0) Divider()
                         ListItemRow(it.badge, it.title, subtitle(it), onClick = { nav.openItem(it) })
@@ -251,14 +275,14 @@ fun HomeScreen(nav: NavHostController, settings: AppSettings) {
 }
 
 @Composable
-private fun HomeTile(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier, primary: Boolean = false, onClick: () -> Unit) {
+private fun HomeTile(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier, onClick: () -> Unit) {
     Column(
-        modifier.height(96.dp).clip(RoundedCornerShape(18.dp)).background(if (primary) pal.accent else pal.surface)
-            .then(if (primary) Modifier else Modifier.background(pal.surface)).tap(haptic = true, onClick = onClick).padding(14.dp),
+        modifier.height(92.dp).clip(RoundedCornerShape(18.dp)).background(pal.surface).border(1.dp, pal.line, RoundedCornerShape(18.dp))
+            .tap(haptic = true, scaleTo = 0.95f, onClick = onClick).padding(14.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Icon(icon, null, tint = if (primary) pal.accentInk else pal.accent, modifier = Modifier.size(24.dp))
-        Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = if (primary) pal.accentInk else pal.ink)
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(pal.accentSoft), contentAlignment = Alignment.Center) { Icon(icon, null, tint = pal.accent, modifier = Modifier.size(20.dp)) }
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = pal.ink)
     }
 }
 
@@ -285,6 +309,7 @@ fun TextScreen(nav: NavHostController, settings: AppSettings) {
     var src by remember { mutableStateOf(Handoff.text) }
     var out by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf<String?>(null) }
     var copied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
@@ -298,7 +323,8 @@ fun TextScreen(nav: NavHostController, settings: AppSettings) {
         if (engine == Engine.State.NoModel) { out = ""; return@LaunchedEffect }
         delay(if (out.isEmpty()) 0 else 280)
         busy = true
-        out = runCatching { ctx.app.engine.translate(src, dir) }.getOrElse { "⚠ ${it.message}" }
+        failed = null
+        out = runCatching { ctx.app.engine.translate(src, dir) }.getOrElse { app.carnet.diag.Diag.report(it, "translate.text"); failed = app.carnet.diag.Diag.friendly(it, "translate"); out }
         busy = false
     }
     LaunchedEffect(Unit) { if (src.isEmpty()) focus.requestFocus() }
@@ -350,7 +376,9 @@ fun TextScreen(nav: NavHostController, settings: AppSettings) {
                     }
                 }
             }
-            if (engine == Engine.State.Failed) Text("Translation engine failed to start: ${ctx.app.engine.error}", color = pal.danger, style = Type.small)
+            (failed ?: if (engine == Engine.State.Failed) "Translation couldn't start. Restart the app, or download the model again in Settings." else null)?.let {
+                Text(it, color = pal.danger, style = Type.small)
+            }
         }
     }
     DisposableEffect(Unit) {

@@ -212,7 +212,7 @@ fun ScanScreen(nav: NavHostController, settings: AppSettings) {
                                 shutter = false
                                 if (mode == 2) pages.add(f) else process(listOf(f))
                             }
-                            override fun onError(e: ImageCaptureException) { shutter = false; android.widget.Toast.makeText(ctx, e.message, android.widget.Toast.LENGTH_SHORT).show() }
+                            override fun onError(e: ImageCaptureException) { shutter = false; app.carnet.diag.Diag.report(e, "camera"); android.widget.Toast.makeText(ctx, "Couldn't take the photo. Try again.", android.widget.Toast.LENGTH_SHORT).show() }
                         })
                     }, contentAlignment = Alignment.Center) { Box(Modifier.size(60.dp).clip(CircleShape).background(Color.White)) }
                     if (mode == 2 && pages.isNotEmpty()) IconBtn(Ic.Check, "Done", tint = Color.Black, size = 52.dp, bg = Color.White) { process(pages.toList()) }
@@ -322,7 +322,7 @@ fun ScanResultScreen(nav: NavHostController, id: String) {
                         withContext(Dispatchers.IO) { File(dir, "page-${page + 1}.en.jpg").outputStream().use { res.translated.compress(Bitmap.CompressFormat.JPEG, 92, it) } }
                         en = res.englishText; fr = res.frenchText
                         File(dir, "english.txt").writeText(en)
-                    }.onFailure { android.widget.Toast.makeText(ctx, it.message, android.widget.Toast.LENGTH_LONG).show() }
+                    }.onFailure { app.carnet.diag.Diag.report(it, "handwriting"); android.widget.Toast.makeText(ctx, app.carnet.diag.Diag.friendly(it, "read this page"), android.widget.Toast.LENGTH_LONG).show() }
                     improving = false
                 }
             }
