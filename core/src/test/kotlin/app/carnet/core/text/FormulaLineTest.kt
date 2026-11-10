@@ -34,3 +34,11 @@ class AddressGuardTest {
         kotlin.test.assertTrue("www.telerecours.fr" in out, out)
     }
 }
+
+class SubjectHeadingTest {
+    @Test
+    fun subjectAfterColon() {
+        val m = SchoolTerms.matches("Chapitre 2 : Français")
+        kotlin.test.assertTrue(m.any { it.second == ": French" }, m.toString())
+    }
+}

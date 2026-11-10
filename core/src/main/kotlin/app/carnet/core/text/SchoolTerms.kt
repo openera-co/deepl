@@ -36,12 +36,19 @@ object SchoolTerms {
         Term("équation bilan", "overall equation"), Term("équations bilans", "overall equations"), Term("Équation bilan", "Overall equation"),
         Term("dégagement gazeux", "release of gas"), Term("dégagement régulier", "steady release"), Term("dégagement important", "large release"),
         Term("dégagement de dioxygène", "release of oxygen"), Term("dégagement de dihydrogène", "release of hydrogen"),
+        Term("Sciences de la Vie et de la Terre", "Biology"), Term("sciences de la vie et de la Terre", "biology"),
+        Term("éducation physique et sportive", "PE"), Term("Éducation physique et sportive", "PE"), Term("Histoire-Géographie", "History and Geography"),
+        Term("Physique-Chimie", "Physics and Chemistry"), Term("enseignement moral et civique", "moral and civic education"),
         Term("berline", "sedan"), Term("berlines", "sedans"), Term("contrôle de gestion", "management control"),
     )
 
     /** Patterns with a captured part kept as is ("Exercice 3" → "Exercise 3"). */
     private val patterns: List<Pair<Regex, String>> = listOf(
         Regex("(?<![\\p{L}])(?i:exercice)s?\\s+(\\d+|[IVX]{1,4}|[A-Z])(?![\\p{L}\\p{N}])") to "Exercise $1",
+        // A school subject named alone after a heading colon ("Chapitre 2 : Français" is the subject, not "the French").
+        Regex(":\\s*Français\\s*$") to ": French", Regex(":\\s*Mathématiques\\s*$") to ": Maths", Regex(":\\s*Anglais\\s*$") to ": English",
+        Regex(":\\s*Histoire-Géographie\\s*$") to ": History and Geography", Regex(":\\s*Physique-Chimie\\s*$") to ": Physics and Chemistry",
+        Regex(":\\s*SVT\\s*$") to ": Biology", Regex(":\\s*Philosophie\\s*$") to ": Philosophy", Regex(":\\s*EPS\\s*$") to ": PE",
     )
 
     private val rules: List<Pair<Regex, String>> = terms.sortedByDescending { it.french.length }.map { t ->
@@ -50,12 +57,12 @@ object SchoolTerms {
 
     fun matches(text: String): List<Pair<IntRange, String>> =
         rules.flatMap { (re, en) -> re.findAll(text).map { it.range to en }.toList() } +
-            patterns.flatMap { (re, en) -> re.findAll(text).map { m -> m.range to en.replace("$1", m.groupValues[1]) }.toList() }
+            patterns.flatMap { (re, en) -> re.findAll(text).map { m -> m.range to en.replace("$1", m.groupValues.getOrElse(1) { "" }) }.toList() }
 
     fun apply(text: String): String {
         var out = text
         for ((re, en) in rules) out = re.replace(out) { m -> if (m.value.first().isUpperCase()) en.replaceFirstChar { it.uppercase() } else en }
-        for ((re, en) in patterns) out = re.replace(out) { m -> en.replace("$1", m.groupValues[1]) }
+        for ((re, en) in patterns) out = re.replace(out) { m -> en.replace("$1", m.groupValues.getOrElse(1) { "" }) }
         return out
     }
 }
