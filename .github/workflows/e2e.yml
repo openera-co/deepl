@@ -25,6 +25,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
+      - name: Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.31.6"
       - name: Bundle the model catalog
         run: |
           mkdir -p app/src/main/assets
@@ -65,4 +69,4 @@ jobs:
           (cd ../e2e-out && zip -q -r ../e2e-render/outputs.zip . ) || true
           cp ../e2e-logcat.txt . 2>/dev/null || true
           gh release delete v0-e2e -y --cleanup-tag 2>/dev/null || true
-          gh release create v0-e2e * --prerelease --latest=false --title "End-to-end test results" --notes "Commit ${{ github.sha }}. Not an app release." --target ${{ github.sha }}
+          gh release create v0-e2e $(find . -maxdepth 1 -type f) --prerelease --latest=false --title "End-to-end test results" --notes "Commit ${{ github.sha }}. Not an app release." --target ${{ github.sha }}
