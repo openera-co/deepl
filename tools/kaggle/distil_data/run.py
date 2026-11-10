@@ -5,8 +5,13 @@
 import subprocess, time, json, re, random, os, sys
 def sh(c): print("+", c, flush=True); subprocess.run(c, shell=True, check=False)
 sh("pip install -q vllm==0.11.0 \"transformers>=4.56,<5\" huggingface_hub 2>&1 | tail -2")
-from huggingface_hub import snapshot_download
-d = snapshot_download("FrancophonIA/Vikidia-EnFr", repo_type="dataset", local_dir="/kaggle/working/vk")
+def vikidia():
+    """Vikidia (CC BY 3.0, Zenodo 6327828) as one archive: thousands of small Hugging Face files get rate-limited."""
+    if not os.path.isdir("/tmp/vk/Vikidia-EnFr-Parsed"):
+        os.makedirs("/tmp/vk", exist_ok=True)
+        sh("curl -sL https://zenodo.org/api/records/6327828/files/Vikidia-EnFr-Parsed.tar.gz/content | tar xzf - -C /tmp/vk")
+    return "/tmp/vk/Vikidia-EnFr-Parsed"
+d = vikidia()
 OUT = "/kaggle/working"
 BUDGET = float(os.environ.get("HOURS", "10.5")) * 3600
 T0 = time.time()
@@ -73,5 +78,4 @@ while time.time() - T0 < BUDGET:
     if not progressed: break
 for f in files.values(): f.close()
 json.dump(pos, open(f"{OUT}/progress.json", "w"))
-sh("rm -rf /kaggle/working/vk")
 print("done", pos)

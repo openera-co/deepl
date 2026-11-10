@@ -34,7 +34,13 @@ train_fonts = [f for n, f in fonts.items() if n not in HELD_OUT]; test_fonts = [
 print("fonts", len(train_fonts), "train,", len(test_fonts), "test", flush=True)
 
 # School text: Vikidia (French encyclopedia for students), cut into handwritten-line lengths.
-vk = snapshot_download("FrancophonIA/Vikidia-EnFr", repo_type="dataset", local_dir="/tmp/vk", allow_patterns=["fr/*", "frsimple/*"])
+def vikidia():
+    """Vikidia (CC BY 3.0, Zenodo 6327828) as one archive: thousands of small Hugging Face files get rate-limited."""
+    if not os.path.isdir("/tmp/vk/Vikidia-EnFr-Parsed"):
+        os.makedirs("/tmp/vk", exist_ok=True)
+        sh("curl -sL https://zenodo.org/api/records/6327828/files/Vikidia-EnFr-Parsed.tar.gz/content | tar xzf - -C /tmp/vk")
+    return "/tmp/vk/Vikidia-EnFr-Parsed"
+vk = vikidia()
 texts = []; R = random.Random(0)
 for fo in ["fr", "frsimple"]:
     for f in sorted(os.listdir(os.path.join(vk, fo))):
