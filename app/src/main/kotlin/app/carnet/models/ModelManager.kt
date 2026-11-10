@@ -130,6 +130,10 @@ class ModelManager(private val context: Context) {
             _status.value = catalog.associate { it.id to (_status.value[it.id]?.takeIf { s -> s !is ModelStatus.NotInstalled } ?: initialStatus(it)) }
         }
         refreshUpdates()
+        // Translation model updates (e.g. the switch to the faster engine) install themselves on Wi-Fi.
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        if (cm != null && !cm.isActiveNetworkMetered)
+            _updates.value.keys.filter { specOrNull(it)?.direction != null }.forEach { update(it) }
     }
 
     fun spec(id: String) = catalog.first { it.id == id }
@@ -147,7 +151,8 @@ class ModelManager(private val context: Context) {
 
     /** The installed translation model for a direction ("fr-en"/"en-fr"), best quality first unless [preferFast]. */
     fun translationModel(direction: String, preferFast: Boolean = false): ModelSpec? {
-        val installed = catalog.filter { it.direction == direction && isInstalled(it.id) }
+        // A model being updated stays usable: its old files are replaced only once the new ones are in.
+        val installed = catalog.filter { it.direction == direction && (isInstalled(it.id) || (jobs[it.id]?.isActive == true && installedSpec(it.id) != null)) }
         return installed.sortedBy { if ((it.quality == "fast") == preferFast) 0 else 1 }.firstOrNull()
     }
 
@@ -413,7 +418,7 @@ class ModelManager(private val context: Context) {
     }
 
     companion object {
-        const val CATALOG_URL = "https://github.com/openera-co/deepl/releases/download/models-v1/models.json"
+        const val CATALOG_URL = "https://github.com/openera-co/deepl/releases/download/models-v2/models.json"
 
         fun sha256(f: File): String {
             val md = MessageDigest.getInstance("SHA-256")

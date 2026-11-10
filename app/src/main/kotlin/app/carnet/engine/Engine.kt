@@ -39,7 +39,7 @@ class Engine(private val context: Context) {
     val state: StateFlow<State> = _state
     @Volatile var error: String? = null; private set
 
-    private class Loaded(val modelId: String, val model: MarianModel, val translator: TextTranslator, val generation: Int)
+    private class Loaded(val modelId: String, val model: java.io.Closeable, val translator: TextTranslator, val generation: Int)
     private val loaded = HashMap<String, Loaded>()
     private val loadLock = Mutex()
     private val decodeLock = Mutex()
@@ -110,6 +110,12 @@ class Engine(private val context: Context) {
         }
     }
 
+    /**
+     * CTranslate2 threads: on GitHub's 4-core ARM64 machines 2 threads beat 4 (11.5 vs 3.1 lines/s,
+     * the cores fight over memory bandwidth); phones have 2–4 big cores. Tuned by the engine workflow.
+     */
+    private fun ct2Threads(): Int = Runtime.getRuntime().availableProcessors().coerceIn(1, 2)
+
     /** The translator for a direction, loading its model if needed. */
     suspend fun translator(dir: String = FR_EN): TextTranslator {
         loaded[dir]?.let { return it.translator }
@@ -122,10 +128,27 @@ class Engine(private val context: Context) {
                 withContext(Dispatchers.Default) {
                     val timing = app.carnet.diag.Diag.timing("model.load").tag("model", spec.id)
                     val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
-                    val m = MarianModel(DirectorySource(context.app.models.dir(spec.id)), threads = threads)
-                    val sentence = object : SentenceTranslator {
-                        override fun translateSentences(sentences: List<String>, cancel: () -> Boolean) = m.translate(sentences, beam = beam, cancel = cancel)
-                        override fun translateCarefully(sentences: List<String>, cancel: () -> Boolean) = m.translate(sentences, beam = 4, cancel = cancel)
+                    val mdir = context.app.models.dir(spec.id)
+                    // CTranslate2 (C++, int8 NEON kernels) when the model has its files; ONNX Runtime otherwise.
+                    val native = if (app.carnet.nativeai.Ct2Model.available(mdir))
+                        runCatching { app.carnet.nativeai.Ct2Model(mdir, DirectorySource(mdir), ct2Threads()) }
+                            .onFailure { app.carnet.diag.Diag.report(it, "model.load.ct2", mapOf("model" to spec.id)) }.getOrNull() else null
+                    timing.tag("engine", if (native != null) "ct2" else "ort")
+                    val m: java.io.Closeable
+                    val sentence: SentenceTranslator
+                    if (native != null) {
+                        m = native
+                        sentence = object : SentenceTranslator {
+                            override fun translateSentences(sentences: List<String>, cancel: () -> Boolean) = native.translator(beam).translateSentences(sentences, cancel)
+                            override fun translateCarefully(sentences: List<String>, cancel: () -> Boolean) = native.translator(4).translateSentences(sentences, cancel)
+                        }
+                    } else {
+                        val om = MarianModel(DirectorySource(mdir), threads = threads)
+                        m = om
+                        sentence = object : SentenceTranslator {
+                            override fun translateSentences(sentences: List<String>, cancel: () -> Boolean) = om.translate(sentences, beam = beam, cancel = cancel)
+                            override fun translateCarefully(sentences: List<String>, cancel: () -> Boolean) = om.translate(sentences, beam = 4, cancel = cancel)
+                        }
                     }
                     val src = dir.substringBefore('-'); val tgt = dir.substringAfter('-')
                     // The glossary is written French → English; reversed for English → French.

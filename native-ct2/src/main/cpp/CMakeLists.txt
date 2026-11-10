@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.22)
+project(carnet_ct2 C CXX)
+set(CMAKE_CXX_STANDARD 17)
+include(FetchContent)
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(WITH_MKL OFF CACHE BOOL "" FORCE)
+set(WITH_RUY ON CACHE BOOL "" FORCE)
+set(OPENMP_RUNTIME COMP CACHE STRING "" FORCE)
+set(BUILD_CLI OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ENABLE_CPU_DISPATCH OFF CACHE BOOL "" FORCE)
+
+if (DEFINED CT2_SRC AND EXISTS ${CT2_SRC})
+    add_subdirectory(${CT2_SRC} ct2-build)
+else()
+    FetchContent_Declare(ctranslate2 GIT_REPOSITORY https://github.com/OpenNMT/CTranslate2.git GIT_TAG v4.8.5 GIT_SHALLOW TRUE
+        GIT_SUBMODULES "third_party/ruy;third_party/cpu_features;third_party/spdlog")
+    FetchContent_MakeAvailable(ctranslate2)
+endif()
+
+add_library(carnet_ct2 SHARED ct2_jni.cpp)
+target_link_libraries(carnet_ct2 PRIVATE ctranslate2 log android)
+target_link_options(carnet_ct2 PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections -static-openmp)
+set_target_properties(carnet_ct2 PROPERTIES CXX_VISIBILITY_PRESET hidden)

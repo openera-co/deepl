@@ -93,6 +93,7 @@ tasks.named("preBuild") { dependsOn(generatePdfShared) }
 
 dependencies {
     implementation(project(":core"))
+    if (providers.gradleProperty("carnet.native").orNull == "true" || providers.gradleProperty("carnet.ct2").orNull == "true") implementation(project(":native-ct2"))
     if (providers.gradleProperty("carnet.native").orNull == "true") {
         implementation(project(":native-llama"))
         implementation(project(":native-whisper"))

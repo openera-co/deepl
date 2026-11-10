@@ -21,3 +21,5 @@ include(":core", ":app")
 // the optional Improve/handwriting features report themselves as unavailable.
 val nativeEngines = providers.gradleProperty("carnet.native").orNull == "true"
 if (nativeEngines) include(":native-llama", ":native-whisper")
+// The translation engine (CTranslate2) alone, e.g. for emulator tests: -Pcarnet.ct2=true.
+if (nativeEngines || providers.gradleProperty("carnet.ct2").orNull == "true") include(":native-ct2")

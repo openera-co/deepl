@@ -13,6 +13,8 @@ MODELS = [
     ("htr-fr", "Handwriting reader", "Reads handwritten French notes", None, None),
 ]
 FILES = ["encoder_model.int8.onnx", "decoder_model_merged.int8.onnx", "source.pieces", "target.pieces", "vocab.txt", "model.json"]
+# CTranslate2 conversion (models-v2): the engine's files plus the app's own tokenisation files.
+CT2_FILES = ["model.bin", "config.json", "shared_vocabulary.json", "source.pieces", "target.pieces", "vocab.txt", "model.json"]
 HTR_FILES = ["encoder_model.int8.onnx", "decoder_model_merged.int8.onnx", "vocab.txt", "htr.json"]
 
 
@@ -32,7 +34,7 @@ for mid, title, purpose, direction, quality in MODELS:
     if not os.path.isdir(d):
         continue
     files = []
-    for f in (HTR_FILES if mid == "htr-fr" else FILES):
+    for f in (HTR_FILES if mid == "htr-fr" else CT2_FILES if os.path.exists(os.path.join(d, "model.bin")) else FILES):
         p = os.path.join(d, f)
         files.append({"name": f, "url": f"{base}/{mid}__{f}", "size": os.path.getsize(p), "sha256": sha(p)})
         shutil.copy(p, os.path.join(up, f"{mid}__{f}"))

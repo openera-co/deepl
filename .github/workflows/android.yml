@@ -24,7 +24,7 @@ jobs:
       - name: Bundle the model catalog (models are downloaded in the app)
         run: |
           mkdir -p app/src/main/assets
-          curl -sfL https://github.com/${{ github.repository }}/releases/download/models-v1/models.json -o app/src/main/assets/models.json || echo "no catalog yet"
+          curl -sfL https://github.com/${{ github.repository }}/releases/download/models-v2/models.json -o app/src/main/assets/models.json || echo "no catalog yet"
 
       - name: Android SDK packages
         run: |

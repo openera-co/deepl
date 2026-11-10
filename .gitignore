@@ -10,3 +10,6 @@ local.properties
 *.apk
 !/app/carnet-shared.keystore
 __pycache__/
+
+.cxx/
+**/.cxx/

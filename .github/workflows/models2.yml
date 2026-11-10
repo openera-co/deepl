@@ -1,0 +1,50 @@
+name: Publish models (CTranslate2)
+
+# The same translation models converted for CTranslate2 (int8), the app's engine from 1.3: 1.75x
+# faster on ARM64 and they open in ~0.1 s. Published with the handwriting reader as "models-v2";
+# apps before the switch keep reading "models-v1".
+on:
+  workflow_dispatch:
+  push:
+    paths: [ ".github/workflows/models2.yml", "tools/publish_models.py" ]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Convert
+        run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q "transformers<5" sentencepiece sacremoses ctranslate2
+          set -e
+          v1=https://github.com/${{ github.repository }}/releases/download/models-v1
+          for spec in fr-en:opus-mt-tc-big-fr-en en-fr:opus-mt-tc-big-en-fr fr-en-fast:opus-mt-fr-en en-fr-fast:opus-mt-en-fr; do
+            id=${spec%%:*}; hf=Helsinki-NLP/${spec#*:}
+            ct2-transformers-converter --model $hf --output_dir m/$id --quantization int8 --force > /dev/null
+            for f in source.pieces target.pieces vocab.txt model.json; do curl -sfL $v1/${id}__$f -o m/$id/$f; done
+            ls -la m/$id
+          done
+          mkdir -p m/htr-fr && for f in encoder_model.int8.onnx decoder_model_merged.int8.onnx vocab.txt htr.json; do curl -sfL $v1/htr-fr__$f -o m/htr-fr/$f; done
+          du -sh m/*
+      - name: Check the conversion translates like the app's tokenisation expects
+        run: |
+          python - <<'PY'
+          import ctranslate2
+          for d, s in [("m/fr-en", "▁Bonjour ▁à ▁tous ."), ("m/en-fr", "▁Hello ▁everyone .")]:
+              r = ctranslate2.Translator(d).translate_batch([s.split() + ["</s>"]])[0].hypotheses[0]
+              print(d, r); assert r
+          PY
+      - name: Catalog
+        run: python tools/publish_models.py m "https://github.com/${{ github.repository }}/releases/download/models-v2"
+      - name: Release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view models-v2 >/dev/null 2>&1 || gh release create models-v2 --title "Translation models (CTranslate2)" --notes "Model files the app downloads (Models screen). Not an app release." --prerelease --latest=false --target ${{ github.sha }}
+          gh release upload models-v2 m/upload/* --clobber

@@ -7,7 +7,6 @@ src=$1; ref=$2
 (cd ct2src && git submodule update --init --depth 1 third_party/ruy third_party/cpu_features third_party/spdlog > /dev/null 2>&1 && git -C third_party/ruy submodule update --init --depth 1 > /dev/null 2>&1)
 cmake -S ct2src -B ct2build -DCMAKE_BUILD_TYPE=Release -DWITH_MKL=OFF -DWITH_RUY=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DBUILD_SHARED_LIBS=OFF -DENABLE_CPU_DISPATCH=OFF -DCMAKE_INSTALL_PREFIX=$PWD/ct2inst > /dev/null
 cmake --build ct2build -j$(nproc) > /dev/null && cmake --install ct2build > /dev/null
-g++ -O2 -std=c++17 tools/engine/ct2_cli.cpp -Ict2inst/include -Lct2inst/lib -Lct2build -lctranslate2 $(find ct2build -name "libruy*.a" -o -name "libcpu_features.a" | sed 's|^|-Wl,--whole-archive |;s|$| -Wl,--no-whole-archive|' | tr '\n' ' ') -fopenmp -lpthread -o ct2_cli 2>&1 | tail -5 || \
 g++ -O2 -std=c++17 tools/engine/ct2_cli.cpp -Ict2inst/include -Wl,--start-group ct2build/libctranslate2.a $(find ct2build -name "*.a" ! -name libctranslate2.a | tr '\n' ' ') -Wl,--end-group -fopenmp -lpthread -o ct2_cli
 python - "$src" > src.tok <<'PY'
 import sys
