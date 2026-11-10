@@ -1,0 +1,44 @@
+name: Launch check
+
+# Installs the release build (R8-shrunk, native engines) on an emulator, opens it, walks the main
+# screens and fails if the app crashes. Logcat is saved as an artifact.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "claude/**" ]
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - name: Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.31.6"
+      - name: Bundle the model catalog
+        run: |
+          mkdir -p app/src/main/assets
+          curl -sfL https://github.com/${{ github.repository }}/releases/download/models-v1/models.json -o app/src/main/assets/models.json || true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build release for the emulator
+        run: ./gradlew :app:assembleRelease -Pcarnet.native=true -Pcarnet.abi=x86_64
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Open the app
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          ram-size: 4096M
+          disable-animations: true
+          script: bash tools/launch_check.sh app/build/outputs/apk/release/app-release.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: launch-logcat, path: "launch-*" }
