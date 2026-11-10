@@ -11,7 +11,7 @@ import kotlin.math.min
  * positioned lines → paragraph blocks (with inline styles) → translated, styled text fitted back.
  * Coordinates: origin top-left, y grows downwards, units are the caller's (PDF points or pixels).
  */
-data class Style(val bold: Boolean = false, val italic: Boolean = false, val color: Int = 0xFF000000.toInt(), val fontName: String = "")
+data class Style(val bold: Boolean = false, val italic: Boolean = false, val color: Int = 0xFF000000.toInt(), val fontName: String = "", val underline: Boolean = false)
 
 data class StyledRun(val text: String, val style: Style)
 

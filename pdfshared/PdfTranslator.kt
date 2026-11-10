@@ -46,9 +46,12 @@ data class PdfStats(val pages: Int, val blocks: Int, val translated: Int, val sc
  * English text is drawn in the same blocks, same colour, matching font family, size reduced only
  * when needed to fit. Images, vector graphics, links and page structure are untouched.
  */
+private val PATH_OPS = setOf("m", "l", "c", "v", "y", "h", "re", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n")
+
 class PdfTranslator(private val fonts: FontProvider) {
 
     private class Captured(val page: Int, val positions: List<TextPosition>, val colors: List<Int>)
+    class HLine(val page: Int, val y: Float, val x0: Float, val x1: Float, val firstOp: Int, val lastOp: Int)
     class Unmapped(val page: Int, val left: Float, val top: Float, val right: Float, val bottom: Float, val op: Int, val form: org.apache.pdfbox.cos.COSStream?, val picture: Boolean = false)
     /** A line read by OCR from a page image, in page points (top-left origin). */
     class OcrLine(val left: Float, val top: Float, val right: Float, val bottom: Float, val text: String)
@@ -163,11 +166,12 @@ class PdfTranslator(private val fonts: FontProvider) {
                 val v = (operands ?: emptyList()).map { (it as? org.apache.pdfbox.cos.COSNumber)?.floatValue() ?: 0f }
                 when (op) {
                     "re" -> if (v.size >= 4) {
+                        if (segs.isEmpty()) pathStart = opIndex
                         val x = v[0]; val y = v[1]; val w = v[2]; val h = v[3]
                         val pts = listOf(dev(x, y), dev(x + w, y), dev(x + w, y + h), dev(x, y + h))
                         for (i in 0 until 4) segs.add(floatArrayOf(pts[i][0], pts[i][1], pts[(i + 1) % 4][0], pts[(i + 1) % 4][1]))
                     }
-                    "m" -> if (v.size >= 2) { val d = dev(v[0], v[1]); px = d[0]; py = d[1]; sx = px; sy = py }
+                    "m" -> if (v.size >= 2) { if (segs.isEmpty()) pathStart = opIndex; val d = dev(v[0], v[1]); px = d[0]; py = d[1]; sx = px; sy = py }
                     "l" -> if (v.size >= 2) { val d = dev(v[0], v[1]); segs.add(floatArrayOf(px, py, d[0], d[1])); px = d[0]; py = d[1] }
                     "c" -> if (v.size >= 6) { val d = dev(v[4], v[5]); px = d[0]; py = d[1] }
                     "v", "y" -> if (v.size >= 4) { val d = dev(v[2], v[3]); px = d[0]; py = d[1] }
@@ -178,9 +182,15 @@ class PdfTranslator(private val fonts: FontProvider) {
             }
         }
 
+        private var pathStart = -1
+        /** Single horizontal lines and the operators that draw them (candidate underlines). */
+        val hlines = ArrayList<HLine>()
+        /** Small pictures of single characters (y = centre). */
+        val glyphPictures = ArrayList<HLine>()
         private fun commit(op: String) {
             val box = currentPage.cropBox
             val (hs, vs) = rules.getOrPut(currentPageNo - 1) { ArrayList<Rule>() to ArrayList() }
+            val hBefore = hs.size; val vBefore = vs.size
             val filled = op != "S" && op != "s"
             // A filled shape only counts as a rule when it is thin (a drawn line); its edges are box edges otherwise.
             val xs = segs.flatMap { listOf(it[0], it[2]) }; val ys = segs.flatMap { listOf(it[1], it[3]) }
@@ -194,6 +204,10 @@ class PdfTranslator(private val fonts: FontProvider) {
                 if (x1 - x0 < 0.5f && y1 - y0 > 3f) vs.add(Rule(x0, y0, y1))
                 else if (y1 - y0 < 0.5f && x1 - x0 > 3f) hs.add(Rule(y0, x0, x1))
             }
+            // A path that drew exactly one horizontal line (and nothing else) may be an underline.
+            if (depth == 0 && pathStart >= 0 && hs.size == hBefore + 1 && vs.size == vBefore)
+                hs.last().let { r -> hlines.add(HLine(currentPageNo - 1, r.pos, r.from, r.to, pathStart, opIndex)) }
+            pathStart = -1
             segs.clear()
         }
         /** Glyphs drawn with a font that has no Unicode mapping, and pictures of text lines: text only readable visually. */
@@ -208,8 +222,10 @@ class PdfTranslator(private val fonts: FontProvider) {
             val xs = listOf(m.translateX, m.translateX + m.scaleX, m.translateX + m.shearX, m.translateX + m.scaleX + m.shearX)
             val ys = listOf(m.translateY, m.translateY + m.shearY, m.translateY + m.scaleY, m.translateY + m.shearY + m.scaleY)
             val w = xs.max() - xs.min(); val h = ys.max() - ys.min()
-            if (h < 5f || h > 40f || w < h * 2.5f) return
+            if (h < 3f || h > 40f) return
             if (x.width * x.height > 4_000_000) return
+            // Character-sized pictures (a dash, a symbol) inside a line are removed with the line when it's translated.
+            if (w < h * 2.5f) { if (w < h * 2.5f && w < 40f) glyphPictures.add(HLine(currentPageNo - 1, box.upperRightY - (ys.max() + ys.min()) / 2, xs.min() - box.lowerLeftX, xs.max() - box.lowerLeftX, opIndex, opIndex)); return }
             unmapped.add(Unmapped(currentPageNo - 1, xs.min() - box.lowerLeftX, box.upperRightY - ys.max(), xs.max() - box.lowerLeftX, box.upperRightY - ys.min(), opIndex, null, picture = true))
         }
         override fun showGlyph(trm: org.apache.pdfbox.util.Matrix, font: org.apache.pdfbox.pdmodel.font.PDFont, code: Int, unicode: String?, displacement: org.apache.pdfbox.util.Vector) {
@@ -253,6 +269,10 @@ class PdfTranslator(private val fonts: FontProvider) {
     private val lineOps = IdentityHashMap<TextLine, IntArray>()
     private var opCounts: Map<Int, Int> = emptyMap()
     private var opDisps: Map<Int, Map<Int, Float>> = emptyMap()
+    private var curHLines: Map<Int, List<HLine>> = emptyMap()
+    private var curGlyphPics: Map<Int, List<HLine>> = emptyMap()
+    /** Operators of the underlines drawn under each line (removed with the line, redrawn under the translation). */
+    private val lineUnderline = IdentityHashMap<TextLine, IntArray>()
     /** Per page, glyphs whose letters can't be extracted (see [translate]'s ocr). */
     var unmappedGlyphs: Map<Int, List<Unmapped>> = emptyMap(); private set
     /** Pages whose content couldn't be read (left untranslated). */
@@ -276,6 +296,8 @@ class PdfTranslator(private val fonts: FontProvider) {
         }
         lineOps.clear(); lineForms.clear(); lineAnchor.clear(); skippedPages.clear()
         unmappedGlyphs = s.unmapped.groupBy { it.page }
+        curHLines = s.hlines.groupBy { it.page }; lineUnderline.clear()
+        curGlyphPics = s.glyphPictures.groupBy { it.page }
         opCounts = s.opCount; opDisps = s.disps
         pageRules = s.rules.mapValues { (_, v) -> Rules(v.first, v.second) }
         class Part(val page: Int, val ps: List<TextPosition>, val colors: List<Int>) {
@@ -375,6 +397,14 @@ class PdfTranslator(private val fonts: FontProvider) {
     private fun lineOf(page: Int, ps: List<TextPosition>, colors: List<Int>): TextLine {
         val runs = ArrayList<StyledRun>()
         val sb = StringBuilder()
+        val hl = curHLines[page].orEmpty()
+        val usedUl = LinkedHashSet<HLine>()
+        fun underlined(p: TextPosition): Boolean {
+            if (hl.isEmpty() || (p.dir.toInt() % 360) != 0) return false
+            val cx = p.xDirAdj + p.widthDirAdj / 2; val base = p.yDirAdj; val sz = sizeOf(p).coerceAtLeast(4f)
+            val u = hl.firstOrNull { it.y >= base - 1f && it.y <= base + sz * 0.35f && cx >= it.x0 - 1f && cx <= it.x1 + 1f } ?: return false
+            usedUl.add(u); return true
+        }
         for ((i, p) in ps.withIndex()) {
             var piece = glyphText(p)
             if (i > 0) {
@@ -383,7 +413,7 @@ class PdfTranslator(private val fonts: FontProvider) {
                 if (gap > p.widthOfSpace * 0.45f && !sb.endsWith(" ") && piece != " ") piece = " $piece"
             }
             sb.append(piece)
-            val st = styleOf(p, colors[i])
+            val st = styleOf(p, colors[i]).let { if (glyphText(p).isNotBlank() && underlined(p)) it.copy(underline = true) else it }
             val last = runs.lastOrNull()
             // Spaces join the previous run so style boundaries fall on words.
             if (last != null && (last.style == st || piece.isBlank())) runs[runs.size - 1] = StyledRun(last.text + piece, last.style)
@@ -395,7 +425,9 @@ class PdfTranslator(private val fonts: FontProvider) {
         val top = baseline - size * 0.8f; val bottom = baseline + size * 0.22f
         val main = runs.maxBy { it.text.length }.style
         val rot = ((ps[0].dir.toInt() % 360) + 360) % 360
-        return TextLine(page, left, top, right, bottom, sb.toString(), size, main.bold, main.italic, main.color, main.fontName, runs, rotation = rot)
+        return TextLine(page, left, top, right, bottom, sb.toString(), size, main.bold, main.italic, main.color, main.fontName, runs, rotation = rot).also { tl ->
+            if (usedUl.isNotEmpty()) lineUnderline[tl] = usedUl.flatMap { it.firstOp..it.lastOp }.toIntArray()
+        }
     }
 
     fun family(fontName: String): String {
@@ -468,7 +500,7 @@ class PdfTranslator(private val fonts: FontProvider) {
             // operator from the page: all text of such a form is removed and every block in it redrawn.
             val removeForms = java.util.Collections.newSetFromMap(IdentityHashMap<org.apache.pdfbox.cos.COSStream, Boolean>())
             val replaced = BooleanArray(blocks.size) { jobs[it].result != null }
-            fun opsOf(b: Block) = b.lines.flatMap { (lineOps[it] ?: intArrayOf()).asIterable() }.filter { it >= 0 }
+            fun opsOf(b: Block) = b.lines.flatMap { (lineOps[it] ?: intArrayOf()).asIterable() + (lineUnderline[it] ?: intArrayOf()).asIterable() }.filter { it >= 0 }
             fun formsOf(b: Block) = b.lines.flatMap { lineForms[it] ?: emptyList() }
             var changed = true
             while (changed) {
@@ -482,6 +514,29 @@ class PdfTranslator(private val fonts: FontProvider) {
                     }
                 }
             }
+            // Punctuation-only pieces (a dash or bullet drawn on its own) inside a translated block belong to
+            // it: the translation already carries them, so the originals go instead of floating in the new text.
+            val absorbed = BooleanArray(blocks.size)
+            for ((bi, b) in blocks.withIndex()) {
+                if (replaced[bi] || b.text.any { it.isLetterOrDigit() } || b.text.isBlank()) continue
+                val cx = (b.left + b.right) / 2; val cy = (b.top + b.bottom) / 2
+                val host = blocks.indices.firstOrNull { j -> j != bi && jobs[j].result != null && blocks[j].page == b.page &&
+                    blocks[j].lines.any { l -> cy >= l.top - 1 && cy <= l.bottom + 1 && cx >= l.left - 2 && cx <= l.right + 2 } }
+                if (host != null) { absorbed[bi] = true; replaced[bi] = true; removeOps.getOrPut(b.page) { HashSet() }.addAll(opsOf(b)) }
+            }
+            // Dashes drawn as tiny bars at mid-height inside replaced lines (some exports do this) go too.
+            for ((bi, b) in blocks.withIndex()) {
+                if (!replaced[bi] || absorbed[bi]) continue
+                for (l in b.lines) for (hl in curHLines[b.page].orEmpty()) {
+                    val h = l.bottom - l.top
+                    if (hl.y > l.top + h * 0.3f && hl.y < l.bottom - h * 0.15f && hl.x0 >= l.left - 2 && hl.x1 <= l.right + 2 && hl.x1 - hl.x0 < l.fontSize * 1.5f)
+                        removeOps.getOrPut(b.page) { HashSet() }.addAll(hl.firstOp..hl.lastOp)
+                    for (gp in curGlyphPics[b.page].orEmpty()) {
+                        val cx = (gp.x0 + gp.x1) / 2
+                        if (gp.y >= l.top && gp.y <= l.bottom && cx >= l.left - 2 && cx <= l.right + 2) removeOps.getOrPut(b.page) { HashSet() }.add(gp.firstOp)
+                    }
+                }
+            }
             for (f in removeForms) removeFormText(f)
 
             for ((pi, page) in doc.pages.withIndex()) {
@@ -492,7 +547,7 @@ class PdfTranslator(private val fonts: FontProvider) {
                 val pageH = box.height
                 PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
                     blocks.forEachIndexed { bi, b ->
-                        if (b.page != pi || (selective && !replaced[bi])) return@forEachIndexed
+                        if (b.page != pi || (selective && !replaced[bi]) || absorbed[bi]) return@forEachIndexed
                         val regions: List<Region> = jobs[bi].result ?: b.runs.map { Region(it.format, it.text) }
                         val placement = Layout.fit(b, regions, measurer)
                         for (pl in placement.lines) for (seg in pl.segments) {
@@ -501,7 +556,16 @@ class PdfTranslator(private val fonts: FontProvider) {
                             cs.setNonStrokingColor((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF)
                             val rot = b.lines.first().rotation
                             val anchor = lineAnchor[b.lines.first()]
-                            if (rot == 0 || anchor == null) drawLine(cs, font(seg.style), fallback, placement.fontSize, box.lowerLeftX + seg.x, box.lowerLeftY + pageH - pl.baseline, seg.text)
+                            if (rot == 0 || anchor == null) {
+                                drawLine(cs, font(seg.style), fallback, placement.fontSize, box.lowerLeftX + seg.x, box.lowerLeftY + pageH - pl.baseline, seg.text)
+                                if (seg.style.underline) {
+                                    val uy = box.lowerLeftY + pageH - pl.baseline - placement.fontSize * 0.12f
+                                    val tw = seg.text.trimEnd().let { t -> if (t.length == seg.text.length) seg.width else measurer.width(t, placement.fontSize, seg.style) }
+                                    cs.setStrokingColor((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF)
+                                    cs.setLineWidth((placement.fontSize * 0.06f).coerceAtLeast(0.4f))
+                                    cs.moveTo(box.lowerLeftX + seg.x, uy); cs.lineTo(box.lowerLeftX + seg.x + tw, uy); cs.stroke()
+                                }
+                            }
                             else {
                                 // Map the direction-adjusted layout position back to the page and draw along the text direction.
                                 val dx = seg.x - anchor[0]; val dy = pl.baseline - anchor[1]
@@ -555,6 +619,7 @@ class PdfTranslator(private val fonts: FontProvider) {
                 index++
                 val n = t.name
                 if (n == "Do" && only != null && index in only) { operands.clear(); continue } // a picture of text being replaced
+                if (n in PATH_OPS && only != null && index in only) { operands.clear(); continue } // an underline being redrawn
                 if ((n == "Tj" || n == "TJ" || n == "'" || n == "\"") && (only == null || index in only)) {
                     // ' and " also move to the next line (" also sets word and character spacing).
                     if (n == "\"" && operands.size >= 3) { kept.add(operands[0]); kept.add(Operator.getOperator("Tw")); kept.add(operands[1]); kept.add(Operator.getOperator("Tc")) }
