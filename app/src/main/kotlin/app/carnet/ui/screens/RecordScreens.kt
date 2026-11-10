@@ -127,7 +127,7 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                         }
                     }
                     Text("Tap to record", fontWeight = FontWeight.SemiBold, color = pal.ink, fontSize = 16.sp)
-                    if (!Recorder.available(ctx)) Text("Audio only on this phone", style = Type.small, color = pal.muted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+                    if (!Recorder.available(ctx)) OfflineSpeechChip(Modifier.padding(top = 12.dp))
                 }
                 val recs = recordings.filter { it.type == ItemType.RECORDING }
                 if (recs.isEmpty()) EmptyState(Ic.Mic, "No recordings yet")
@@ -145,6 +145,13 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                     itemsIndexed(st.segments) { _, s -> SegmentView(s, show) }
                     item {
                         if (st.partial.isNotEmpty()) Text(st.partial, color = pal.faint, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                        if (st.needsSpeechModel) Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
+                            Icon(Ic.Mic, null, tint = pal.muted, modifier = Modifier.size(28.dp))
+                            Text(if (Recorder.lang == "en") "This phone can't turn English speech into text" else "This phone can't turn French speech into text",
+                                color = pal.ink, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                            Text("Audio is being recorded", style = Type.small, color = pal.muted)
+                            OfflineSpeechChip(Modifier.padding(top = 14.dp))
+                        }
                         st.error?.let { Text(it, color = pal.danger, style = Type.small) }
                     }
                 }
@@ -168,6 +175,36 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
             }
         }
         BottomNav("record") { nav.tab(it) }
+    }
+}
+
+/**
+ * One tap to get Carnet's own offline speech model (live captions on phones whose speech service
+ * can't do it). Shows progress, and switches a running recording over as soon as it's ready.
+ */
+@Composable
+fun OfflineSpeechChip(modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val mm = ctx.app.models
+    if (!Recorder.offlinePossible(ctx)) {
+        Text("Audio only on this phone", style = Type.small, color = pal.muted, modifier = modifier); return
+    }
+    val status by mm.status.collectAsState()
+    val s = status[Recorder.LIVE_MODEL]
+    LaunchedEffect(s is app.carnet.models.ModelStatus.Installed) { if (s is app.carnet.models.ModelStatus.Installed) Recorder.goOffline() }
+    if (s is app.carnet.models.ModelStatus.Installed) return
+    val start = rememberStartDownload { mm.download(Recorder.LIVE_MODEL) }
+    val size = remember { mm.specOrNull(Recorder.LIVE_MODEL)?.files?.sumOf { it.size } ?: 0L }
+    val label = when (s) {
+        is app.carnet.models.ModelStatus.Downloading -> if (s.total > 0) "Getting offline speech · ${s.done * 100 / s.total}%" else "Getting offline speech…"
+        app.carnet.models.ModelStatus.Verifying -> "Setting up…"
+        is app.carnet.models.ModelStatus.Failed -> "Couldn't download · Try again"
+        else -> "Get offline speech · ${size / 1_000_000} MB"
+    }
+    Row(modifier.clip(CircleShape).background(pal.accent).tap { if (s !is app.carnet.models.ModelStatus.Downloading && s != app.carnet.models.ModelStatus.Verifying) start() }
+        .padding(horizontal = 18.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Ic.Download, null, tint = Color.White, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+        Text(label, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
     }
 }
 

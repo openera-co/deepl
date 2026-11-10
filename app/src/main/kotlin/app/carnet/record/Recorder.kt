@@ -54,15 +54,24 @@ data class RecState(
     val audio: Boolean = false,
     val error: String? = null,
     val recognizer: Boolean = true,
+    /** Who turns speech into text: the phone's speech service, or Carnet's own offline model. */
+    val engine: SpeechEngine = SpeechEngine.PHONE,
+    /** The phone can't recognise this language and the offline speech model isn't downloaded yet. */
+    val needsSpeechModel: Boolean = false,
 ) {
     val elapsedMs: Long get() = if (!recording) 0 else ((if (paused) pausedAt else System.currentTimeMillis()) - startedAt - pausedTotal)
 }
 
+enum class SpeechEngine { PHONE, CARNET }
+
 /**
- * Live dictation: audio is recorded to WAV (for "Improve" later) and, on Android 13+, the same
- * audio stream feeds the on-device speech recogniser. Older phones use the recogniser's own mic.
+ * Live dictation. Audio is recorded to WAV (for "Improve" later). Speech becomes text through, in
+ * order: the phone's on-device recogniser, the phone's regular recogniser, and finally Carnet's own
+ * offline model (whisper), which works on any phone once downloaded. Switching happens on its own,
+ * mid-recording, without losing audio.
  */
 object Recorder {
+    const val LIVE_MODEL = "whisper-small"
     private val _state = MutableStateFlow(RecState())
     val state: StateFlow<RecState> = _state
     private val main = Handler(Looper.getMainLooper())
@@ -71,45 +80,69 @@ object Recorder {
     private var audioThread: Thread? = null
     private var pipeWrite: ParcelFileDescriptor.AutoCloseOutputStream? = null
     private var wavFile: File? = null
+    private var dir: File? = null
     private var segStart = 0L
     private var failures = 0
+    /** Phone recogniser attempts: the on-device one first, then the regular one. */
+    private var onDevice = true
     private lateinit var appCtx: Context
     /** Spoken language: English only when the user chose English → French; school dictation is French otherwise. */
     @Volatile var lang = "fr"; private set
     private const val RATE = 16000
 
+    // Carnet's offline engine: audio thread → live buffer → worker thread.
+    @Volatile private var live = false
+    private val liveBuf = ArrayList<FloatArray>()
+    private var liveSamples = 0
+    private var liveStartMs = 0L
+    @Volatile private var quietBlocks = 0
+    @Volatile private var noiseFloor = 0.01f
+    private var worker: Thread? = null
+    /** Bumped at every start and stop, so a worker still finishing can't touch another recording. */
+    @Volatile private var session = 0
+
     fun available(c: Context): Boolean = SpeechRecognizer.isRecognitionAvailable(c) ||
         (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(c))
+
+    private fun offlineReady(c: Context) = app.carnet.nativeai.NativeLib.whisperLoaded &&
+        c.app.models.isInstalled(LIVE_MODEL)
+
+    /** The offline speech model can run in this build (shown as an option when the phone can't). */
+    fun offlinePossible(c: Context) = c.app.models.supported(LIVE_MODEL)
 
     @SuppressLint("MissingPermission")
     fun start(c: Context, title: String) {
         if (_state.value.recording) return
         appCtx = c.applicationContext
         lang = if (appCtx.app.engine.direction == "en-fr") "en" else "fr"
-        failures = 0
+        failures = 0; onDevice = true; session++
+        appCtx.app.scope.launch { punct = appCtx.app.settings.flow.first().spokenPunctuation }
         val id = appCtx.app.library.newId()
-        val dir = appCtx.app.library.dir(id)
-        val shareMic = Build.VERSION.SDK_INT >= 33
-        _state.value = RecState(recording = true, startedAt = System.currentTimeMillis(), title = title, savedId = id, audio = shareMic, recognizer = available(c))
-        if (shareMic) {
-            wavFile = File(dir, "audio.wav")
-            startAudio(wavFile!!)
-        }
-        main.post { listen() }
+        dir = appCtx.app.library.dir(id)
+        val phone = available(c)
+        // The phone's recogniser keeps its own microphone below Android 13; otherwise we share ours.
+        val ownMic = Build.VERSION.SDK_INT >= 33 || !phone
+        _state.value = RecState(recording = true, startedAt = System.currentTimeMillis(), title = title, savedId = id, audio = ownMic, recognizer = phone)
+        if (ownMic) startAudio()
+        if (phone) main.post { listen() } else goOffline()
     }
 
-    private fun startAudio(f: File) {
+    private fun startAudio() {
+        if (audio != null) return
+        val f = wavFile ?: File(dir, "audio.wav").also { wavFile = it }
         val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         @SuppressLint("MissingPermission")
         val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, RATE))
         audio = rec
         rec.startRecording()
+        _state.value = _state.value.copy(audio = true)
+        val append = f.exists() && f.length() > 44
         audioThread = Thread {
-            FileOutputStream(f).use { out ->
-                out.write(ByteArray(44)) // header written on stop
+            FileOutputStream(f, append).use { out ->
+                if (!append) out.write(ByteArray(44)) // header written on stop
                 val buf = ShortArray(RATE / 10)
                 val bytes = ByteArray(buf.size * 2)
-                while (_state.value.recording) {
+                while (_state.value.recording && audio === rec) {
                     val n = rec.read(buf, 0, buf.size)
                     if (n <= 0) continue
                     if (_state.value.paused) continue
@@ -117,7 +150,9 @@ object Recorder {
                     for (i in 0 until n) { val v = buf[i].toInt(); sum += v * v; bytes[2 * i] = (v and 0xFF).toByte(); bytes[2 * i + 1] = ((v shr 8) and 0xFF).toByte() }
                     out.write(bytes, 0, n * 2)
                     try { pipeWrite?.write(bytes, 0, n * 2) } catch (_: Exception) {}
-                    level((sqrt(sum / n) / 6000.0).toFloat().coerceIn(0f, 1f))
+                    val rms = sqrt(sum / n)
+                    level((rms / 6000.0).toFloat().coerceIn(0f, 1f))
+                    if (live) feed(buf, n, (rms / 32768.0).toFloat())
                 }
             }
         }.apply { name = "carnet-audio"; start() }
@@ -148,13 +183,26 @@ object Recorder {
     }
 
     private fun listen() {
-        if (!_state.value.recording || _state.value.paused) return
-        if (!_state.value.recognizer) return
-        val sr = recognizer ?: (if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(appCtx)) SpeechRecognizer.createOnDeviceSpeechRecognizer(appCtx)
+        val st = _state.value
+        if (!st.recording || st.paused || st.engine != SpeechEngine.PHONE || !st.recognizer) return
+        val useOnDevice = onDevice && Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(appCtx)
+        if (!useOnDevice && !SpeechRecognizer.isRecognitionAvailable(appCtx)) { goOffline(); return }
+        val sr = recognizer ?: (if (useOnDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(appCtx)
         else SpeechRecognizer.createSpeechRecognizer(appCtx)).also { recognizer = it }
         sr.setRecognitionListener(listener)
         segStart = _state.value.elapsedMs
-        try { sr.startListening(intent()) } catch (e: Exception) { app.carnet.diag.Diag.report(e, "record.listen"); _state.value = _state.value.copy(error = "Speech recognition couldn't start. Audio is still being recorded.") }
+        try { sr.startListening(intent()) } catch (e: Exception) { app.carnet.diag.Diag.report(e, "record.listen"); nextRecognizer() }
+    }
+
+    /** The current phone recogniser can't do it: try the regular one, then Carnet's own. */
+    private fun nextRecognizer() {
+        recognizer?.runCatching { destroy() }; recognizer = null
+        failures = 0
+        if (onDevice && SpeechRecognizer.isRecognitionAvailable(appCtx)) {
+            onDevice = false
+            app.carnet.diag.Diag.breadcrumb("record: on-device recogniser unavailable, using the regular one")
+            main.postDelayed({ listen() }, 150)
+        } else goOffline()
     }
 
     private val listener = object : RecognitionListener {
@@ -164,24 +212,21 @@ object Recorder {
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
         override fun onError(error: Int) {
+            if (_state.value.engine != SpeechEngine.PHONE) return
+            if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { _state.value = _state.value.copy(error = "Carnet needs the microphone. Allow it in Settings."); return }
+            if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+                // Ask Android to fetch the language for next time; carry on with the next option now.
+                if (Build.VERSION.SDK_INT >= 33 && onDevice) runCatching { recognizer?.triggerModelDownload(intent()) }
+                nextRecognizer(); return
+            }
             val normal = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             if (!normal) failures++
-            // Some recognisers can't take our shared audio stream: fall back to their own microphone.
-            if (failures >= 4 && audio != null) {
-                audio?.runCatching { stop(); release() }; audio = null
-                pipeWrite?.runCatching { close() }; pipeWrite = null
+            // Some recognisers can't take our shared audio stream: let them use their own microphone.
+            if (failures == 4 && audio != null && Build.VERSION.SDK_INT >= 33) {
+                stopAudio()
                 _state.value = _state.value.copy(audio = false)
-                failures = 0
-            } else if (failures >= 8) {
-                _state.value = _state.value.copy(error = "Speech recognition isn't working on this phone. Audio is still being kept if possible.", recognizer = false)
-                return
-            }
+            } else if (failures >= 8) { nextRecognizer(); return }
             // No match / timeout are normal pauses in dictation: just listen again.
-            if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
-                _state.value = _state.value.copy(error = "French speech recognition isn't installed on this phone", recognizer = false)
-                return
-            }
-            if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { _state.value = _state.value.copy(error = "Microphone permission needed"); return }
             main.postDelayed({ restart() }, if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 400 else 60)
         }
         override fun onResults(results: Bundle?) { failures = 0; commit(results); main.post { restart() } }
@@ -195,20 +240,138 @@ object Recorder {
     }
 
     private fun restart() {
-        if (!_state.value.recording || _state.value.paused) return
+        if (!_state.value.recording || _state.value.paused || _state.value.engine != SpeechEngine.PHONE) return
         recognizer?.cancel()
         listen()
+    }
+
+    private fun stopAudio() {
+        val a = audio ?: return
+        audio = null
+        audioThread?.join(1500); audioThread = null
+        a.runCatching { stop(); release() }
+        pipeWrite?.runCatching { close() }; pipeWrite = null
+    }
+
+    /**
+     * Switches to Carnet's own speech model. Called when the phone can't recognise the language, and
+     * again from the screen once the model has finished downloading.
+     */
+    fun goOffline() {
+        if (!_state.value.recording) return
+        main.post { recognizer?.runCatching { destroy() }; recognizer = null }
+        pipeWrite?.runCatching { close() }; pipeWrite = null
+        if (!offlineReady(appCtx)) {
+            _state.value = _state.value.copy(engine = SpeechEngine.CARNET, needsSpeechModel = true, partial = "", error = null)
+            startAudio()
+            return
+        }
+        _state.value = _state.value.copy(engine = SpeechEngine.CARNET, needsSpeechModel = false, recognizer = true, partial = "", error = null)
+        startAudio()
+        if (worker?.isAlive == true && live) return
+        synchronized(liveBuf) { liveBuf.clear(); liveSamples = 0 }
+        live = true
+        val mine = session
+        worker = Thread { runLive(mine) }.apply { name = "carnet-live"; start() }
+    }
+
+    private fun feed(buf: ShortArray, n: Int, rms: Float) {
+        // Slowly-adapting noise floor: a block is quiet when it's close to the room's background.
+        noiseFloor = if (rms < noiseFloor) rms.coerceAtLeast(0.002f) else noiseFloor * 0.995f + rms * 0.005f
+        val quiet = rms < maxOf(0.008f, noiseFloor * 2.2f)
+        quietBlocks = if (quiet) quietBlocks + 1 else 0
+        val f = FloatArray(n) { buf[it] / 32768f }
+        synchronized(liveBuf) {
+            // Don't keep long silences: only the last half second before speech starts.
+            if (liveSamples == 0 && quiet) return
+            if (liveSamples == 0) liveStartMs = (_state.value.elapsedMs - 100).coerceAtLeast(0)
+            liveBuf.add(f); liveSamples += n
+        }
+    }
+
+    private fun takeChunk(): Pair<FloatArray, Long>? = synchronized(liveBuf) {
+        val secs = liveSamples / RATE.toFloat()
+        val pause = quietBlocks >= 6
+        if (!(secs >= (if (_state.value.recording) 2f else 0.5f) && pause) && secs < 10f) return null
+        val out = FloatArray(liveSamples); var o = 0
+        for (b in liveBuf) { b.copyInto(out, o); o += b.size }
+        liveBuf.clear(); liveSamples = 0
+        out to liveStartMs
+    }
+
+    private fun runLive(mine: Int) {
+        val mm = appCtx.app.models
+        val model = LIVE_MODEL
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+        val h = runCatching { app.carnet.nativeai.NativeLib.whisperInit(mm.file(model, "model.bin").path, threads) }.getOrDefault(0L)
+        if (h == 0L) {
+            _state.value = _state.value.copy(error = "Live captions couldn't start. Audio is still being recorded.")
+            live = false; return
+        }
+        var prompt = ""
+        try {
+            while (session == mine && (_state.value.recording || synchronized(liveBuf) { liveSamples } > RATE)) {
+                // After Stop, the words still buffered are transcribed once more before finishing.
+                if (!_state.value.recording) quietBlocks = 99
+                val chunk = takeChunk()
+                if (chunk == null) {
+                    val speaking = synchronized(liveBuf) { liveSamples } > RATE / 2
+                    if (speaking != _state.value.partial.isNotEmpty()) _state.value = _state.value.copy(partial = if (speaking) "…" else "")
+                    Thread.sleep(150); continue
+                }
+                val (pcm, startMs) = chunk
+                val t0 = System.nanoTime()
+                val raw = runCatching { app.carnet.nativeai.NativeLib.whisperLive(h, pcm, lang, prompt) }
+                    .onFailure { app.carnet.diag.Diag.report(it, "record.live") }.getOrDefault("")
+                val text = cleanLive(raw)
+                app.carnet.diag.Diag.breadcrumb("live chunk ${pcm.size / RATE}s in ${(System.nanoTime() - t0) / 1_000_000}ms")
+                // A slow phone may still be finishing after Stop: never write into the next recording.
+                if (session != mine) break
+                if (text.isNotEmpty()) { prompt = text.takeLast(180); commitText(text, startMs) }
+                if (synchronized(liveBuf) { liveSamples } == 0) _state.value = _state.value.copy(partial = "")
+            }
+        } finally {
+            app.carnet.nativeai.NativeLib.whisperFree(h)
+            if (session == mine) live = false
+        }
+    }
+
+    /** Drops what speech models invent on silence or noise (credits, "thanks for watching", [music]). */
+    private val junk = Regex("(?i)(sous-titr|amara\\.org|merci d'avoir regardé|thanks for watching|abonnez-vous|^\\W*$)")
+    internal fun cleanLive(raw: String): String {
+        val t = raw.replace(Regex("\\[[^\\]]*\\]|\\([^)]*\\)|\\*[^*]*\\*"), " ").replace(Regex("\\s+"), " ").trim()
+        return if (t.length < 2 || junk.containsMatchIn(t)) "" else collapseRepeats(t)
+    }
+
+    /** "des des des des" / "et qui signifie X et qui signifie X …" → said once. */
+    internal fun collapseRepeats(t: String): String {
+        val w = t.split(' ').toMutableList()
+        for (n in 1..8) {
+            var i = 0
+            while (i + 2 * n <= w.size) {
+                var reps = 1
+                while (i + (reps + 1) * n <= w.size && (0 until n).all { k -> w[i + k].equals(w[i + reps * n + k], true) }) reps++
+                if (reps >= 3) repeat((reps - 1) * n) { w.removeAt(i + n) }
+                i++
+            }
+        }
+        return w.joinToString(" ")
     }
 
     private fun commit(b: Bundle?) {
         val raw = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
         if (raw.isEmpty()) { _state.value = _state.value.copy(partial = ""); return }
+        commitText(raw, segStart)
+    }
+
+    @Volatile private var punct = true
+
+    @Synchronized private fun commitText(raw: String, start: Long) {
+        val fr = if (lang == "fr") Dictation.format(raw, punct) else raw.replaceFirstChar { it.uppercase() }.let { if (it.last() in ".!?") it else "$it." }
+        val st = _state.value
+        val idx = st.segments.size
+        _state.value = st.copy(segments = st.segments + Segment(start, fr), partial = if (st.engine == SpeechEngine.CARNET) st.partial else "")
         appCtx.app.scope.launch {
-            val punct = appCtx.app.settings.flow.first().spokenPunctuation
-            val fr = if (lang == "fr") Dictation.format(raw, punct) else raw.replaceFirstChar { it.uppercase() }.let { if (it.last() in ".!?") it else "$it." }
-            val st = _state.value
-            val idx = st.segments.size
-            _state.value = st.copy(segments = st.segments + Segment(segStart, fr), partial = "")
             val en = runCatching { appCtx.app.engine.translate(fr, if (lang == "en") "en-fr" else "fr-en") }.getOrNull()
             val cur = _state.value
             if (idx < cur.segments.size) _state.value = cur.copy(segments = cur.segments.toMutableList().also { it[idx] = it[idx].copy(english = en) })
@@ -226,7 +389,7 @@ object Recorder {
         val st = _state.value
         if (!st.paused) return
         _state.value = st.copy(paused = false, pausedTotal = st.pausedTotal + (System.currentTimeMillis() - st.pausedAt))
-        main.post { listen() }
+        if (st.engine == SpeechEngine.PHONE) main.post { listen() }
     }
 
     fun mark() {
@@ -242,16 +405,17 @@ object Recorder {
         val duration = st.elapsedMs
         _state.value = st.copy(recording = false)
         main.post { recognizer?.destroy(); recognizer = null }
-        audio?.runCatching { stop(); release() }; audio = null
-        audioThread?.join(1500); audioThread = null
-        pipeWrite?.runCatching { close() }; pipeWrite = null
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { stopAudio(); worker?.join(15000); session++; live = false }
+        // Words from the last few seconds the offline engine was still working on.
+        val finalSegs = _state.value.segments.takeIf { it.size >= st.segments.size } ?: st.segments
         wavFile?.let { writeWavHeader(it) }
         val id = st.savedId ?: return null
         val dir = appCtx.app.library.dir(id)
-        saveTranscript(File(dir, "transcript.json"), st.segments)
-        val meta = mapOf("duration" to duration.toString(), "segments" to st.segments.size.toString(), "audio" to (wavFile != null).toString())
+        File(dir, "lang").writeText(lang)
+        saveTranscript(File(dir, "transcript.json"), finalSegs)
+        val meta = mapOf("duration" to duration.toString(), "segments" to finalSegs.size.toString(), "audio" to (wavFile != null).toString())
         appCtx.app.library.put(LibraryItem(id, ItemType.RECORDING, st.title, System.currentTimeMillis(), wavFile?.name, "transcript.json", meta))
-        wavFile = null
+        wavFile = null; this.dir = null
         _state.value = RecState(savedId = id)
         return id
     }

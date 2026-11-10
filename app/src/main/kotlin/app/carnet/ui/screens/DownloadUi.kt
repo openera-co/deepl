@@ -219,7 +219,7 @@ fun aboutModel(m: app.carnet.models.ModelSpec): String = when {
     m.direction != null -> "Most accurate. Used for text, photos, documents and dictation."
     m.id == "htr-fr" -> "Reads handwritten French notes in photos."
     m.id == "handwriting" -> "Reads difficult handwriting and polishes hard sentences. Large and slower."
-    m.id == "whisper-small" -> "Listens to a recording again after you stop, for a cleaner transcript."
+    m.id == "whisper-small" -> "Live captions with no internet, and a cleaner transcript after you stop."
     m.id == "whisper-turbo" -> "The most accurate cleanup of recordings. Slower."
     else -> ""
 }

@@ -84,10 +84,10 @@ class ModelManager(private val context: Context) {
             ModelFile("model.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf", 2489909760, "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"),
             ModelFile("vision.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.mmproj-Q8_0.gguf", 591377600, "482f68be8823dfdfb3561c22cdd1c0f617d0d5e6efe9c323cc6428a4331dba01"),
         )),
-        ModelSpec("whisper-small", "Recording cleanup", "", listOf(
+        ModelSpec("whisper-small", "Offline speech", "", listOf(
             ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", 190085487, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"),
         )),
-        ModelSpec("whisper-turbo", "Recording cleanup · best", "", listOf(
+        ModelSpec("whisper-turbo", "Offline speech · best", "", listOf(
             ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin", 574041195, "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
         )),
     )

@@ -30,6 +30,7 @@ object NativeLib {
     // whisper.cpp
     @JvmStatic external fun whisperInit(model: String, threads: Int): Long
     @JvmStatic external fun whisperTranscribe(ctx: Long, pcm: FloatArray, language: String, cb: ProgressCallback): Array<String>
+    @JvmStatic external fun whisperLive(ctx: Long, pcm: FloatArray, language: String, prompt: String): String
     @JvmStatic external fun whisperFree(ctx: Long)
 
     // llama.cpp + mtmd (TranslateGemma with vision)
@@ -65,7 +66,7 @@ object Whisper {
                     val h = NativeLib.whisperInit(mm.file(model, "model.bin").path, threads())
                     require(h != 0L) { "Couldn't load the model" }
                     val out = try {
-                        NativeLib.whisperTranscribe(h, pcm, "fr") { p -> _progress.value = _progress.value + (id to (p / 100f * 0.9f)) }
+                        NativeLib.whisperTranscribe(h, pcm, if (File(dir, "lang").let { it.exists() && it.readText().trim() == "en" }) "en" else "fr") { p -> _progress.value = _progress.value + (id to (p / 100f * 0.9f)) }
                     } finally { NativeLib.whisperFree(h) }
                     // Each entry is "startMs\ttext".
                     val punct = context.app.settings.flowValue().spokenPunctuation

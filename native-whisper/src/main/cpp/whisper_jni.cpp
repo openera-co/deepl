@@ -51,7 +51,7 @@ JNI(jobjectArray, whisperTranscribe)(JNIEnv * env, jclass, jlong handle, jfloatA
     p.no_context = false;
     p.suppress_blank = true;
     // Teachers dictate slowly with pauses; a French prompt nudges punctuation and spelling.
-    p.initial_prompt = "Bonjour à tous. Prenez vos cahiers. Aujourd'hui, nous étudions le chapitre suivant.";
+    if (std::string(lang) == "fr") p.initial_prompt = "Bonjour à tous. Prenez vos cahiers. Aujourd'hui, nous étudions le chapitre suivant.";
 
     ProgressCtx pc{env, cb, env->GetMethodID(env->GetObjectClass(cb), "onProgress", "(I)V")};
     p.progress_callback = on_progress;
@@ -72,6 +72,38 @@ JNI(jobjectArray, whisperTranscribe)(JNIEnv * env, jclass, jlong handle, jfloatA
         env->DeleteLocalRef(s);
     }
     return out;
+}
+
+// Live dictation: one chunk (cut at a pause), greedy. Tested on French FLEURS (tools/speech):
+// a shortened encoder window makes the model loop (WER 64%), and greedy with no temperature
+// fallback loops too; full window + fallback + a token cap gives 16.8% WER with the small model. [prompt] is the text heard just before,
+// which keeps names and spelling consistent across chunks.
+JNI(jstring, whisperLive)(JNIEnv * env, jclass, jlong handle, jfloatArray jpcm, jstring jlang, jstring jprompt) {
+    auto * ctx = reinterpret_cast<whisper_context *>(handle);
+    jsize n = env->GetArrayLength(jpcm);
+    std::vector<float> pcm(n);
+    env->GetFloatArrayRegion(jpcm, 0, n, pcm.data());
+    const char * lang = env->GetStringUTFChars(jlang, nullptr);
+    const char * prompt = env->GetStringUTFChars(jprompt, nullptr);
+    whisper_full_params p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    p.language = lang;
+    p.translate = false;
+    p.n_threads = std::max(1, std::min(4, (int) std::thread::hardware_concurrency()));
+    p.print_progress = false; p.print_realtime = false; p.print_timestamps = false;
+    p.no_timestamps = true;
+    p.no_context = true;
+    p.suppress_blank = true;
+    p.temperature_inc = 0.2f;                       // retry hotter only when the output looks like a loop
+    p.max_tokens = (int) (n / 16000.0 * 7.0) + 8;    // speech is < 4 tokens/s; more means a loop
+    std::string pr = prompt;
+    if (pr.empty() && std::string(lang) == "fr") pr = "Bonjour à tous. Aujourd'hui, nous étudions le chapitre suivant.";
+    p.initial_prompt = pr.c_str();
+    int rc = whisper_full(ctx, p, pcm.data(), (int) pcm.size());
+    std::string text;
+    if (rc == 0) for (int i = 0; i < whisper_full_n_segments(ctx); i++) text += whisper_full_get_segment_text(ctx, i);
+    env->ReleaseStringUTFChars(jlang, lang);
+    env->ReleaseStringUTFChars(jprompt, prompt);
+    return env->NewStringUTF(text.c_str());
 }
 
 JNI(void, whisperFree)(JNIEnv *, jclass, jlong handle) {
