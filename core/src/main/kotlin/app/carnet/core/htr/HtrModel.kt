@@ -139,8 +139,14 @@ class HtrModel(private val source: ModelSource, threads: Int = Runtime.getRuntim
                 for (r in 0 until b) {
                     if (done[r]) { next[r] = padId.toLong(); continue }
                     var best = 0; var bv = Float.NEGATIVE_INFINITY
-                    for (k in 0 until v) { if (k == padId) continue; val x = logits.get(r * v + k); if (x > bv) { bv = x; best = k } }
-                    if (best == eosId) done[r] = true else outs[r].add(best)
+                    // Never a token for the third time in a row: a greedy decoding loop ("reç������…") is
+                    // replaced by the next most likely token, and the rest of the line is still read.
+                    val o = outs[r]
+                    val ban = if (o.size >= 2 && o[o.size - 1] == o[o.size - 2]) o[o.size - 1] else -1
+                    for (k in 0 until v) { if (k == padId || k == ban) continue; val x = logits.get(r * v + k); if (x > bv) { bv = x; best = k } }
+                    if (best == eosId) done[r] = true else {
+                        outs[r].add(best)
+                    }
                     next[r] = best.toLong(); if (!done[r]) allDone = false
                 }
                 if (allDone) break
@@ -169,7 +175,7 @@ class HtrModel(private val source: ModelSource, threads: Int = Runtime.getRuntim
         if (!byteLevel) return pieces.joinToString("").replace('▁', ' ').trim()
         val bytes = java.io.ByteArrayOutputStream()
         for (p in pieces) for (c in p) { val b = byteOf[c]; if (b != null) bytes.write(b) else bytes.write(c.toString().toByteArray(Charsets.UTF_8)) }
-        return String(bytes.toByteArray(), Charsets.UTF_8).trim()
+        return String(bytes.toByteArray(), Charsets.UTF_8).replace("\uFFFD", "").trim()
     }
 
     override fun close() { encoder.close(); decoder.close() }
