@@ -49,6 +49,9 @@ data class PdfStats(val pages: Int, val blocks: Int, val translated: Int, val sc
 class PdfTranslator(private val fonts: FontProvider) {
 
     private class Captured(val page: Int, val positions: List<TextPosition>, val colors: List<Int>)
+    class Unmapped(val page: Int, val left: Float, val top: Float, val right: Float, val bottom: Float, val op: Int, val form: org.apache.pdfbox.cos.COSStream?, val picture: Boolean = false)
+    /** A line read by OCR from a page image, in page points (top-left origin). */
+    class OcrLine(val left: Float, val top: Float, val right: Float, val bottom: Float, val text: String)
 
     private inner class Stripper(private val colorOf: IdentityHashMap<TextPosition, Int>) : PDFTextStripper() {
         val lines = ArrayList<Captured>()
@@ -66,6 +69,7 @@ class PdfTranslator(private val fonts: FontProvider) {
             val top = depth == 0 && nested == 0
             if (top) opIndex++
             val name = operator.name
+            if (top && name == "Do") pictureOfText(operands)
             val shows = top && (name == "Tj" || name == "TJ")
             val before = if (shows) textMatrix?.clone() else null
             nested++
@@ -121,6 +125,26 @@ class PdfTranslator(private val fonts: FontProvider) {
             // Path operators: straight rules (table borders, box edges, underlines) are collected so text
             // never merges or grows across them.
             for (n in listOf("re", "m", "l", "h", "S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "n", "c", "v", "y")) addOperator(PathOp(n))
+            addOperator(MaskedTextOp())
+        }
+
+        /**
+         * Text inside a soft mask (Word's transparent/"faded" text effects export as a grey image painted
+         * through the text as a mask): readers skip it, so it's walked here like a form. Removing that
+         * text later empties the mask, so the faded original disappears under the translation.
+         */
+        private val seenMasks = java.util.Collections.newSetFromMap(IdentityHashMap<org.apache.pdfbox.cos.COSBase, Boolean>())
+        var inMask = 0
+        private inner class MaskedTextOp : org.apache.pdfbox.contentstream.operator.state.SetGraphicsStateParameters() {
+            override fun process(operator: Operator, operands: MutableList<org.apache.pdfbox.cos.COSBase>?) {
+                super.process(operator, operands)
+                val group = runCatching { graphicsState.softMask?.group }.getOrNull() ?: return
+                if (!seenMasks.add(group.cosObject)) return
+                val saved = graphicsState.softMask
+                runCatching { graphicsState.softMask = null } // the mask itself mustn't apply while reading it
+                inMask++
+                try { showTransparencyGroup(group) } catch (e: Exception) { if (e is InterruptedException) throw e } finally { inMask--; runCatching { graphicsState.softMask = saved } }
+            }
         }
 
         val rules = HashMap<Int, Pair<ArrayList<Rule>, ArrayList<Rule>>>()
@@ -172,8 +196,34 @@ class PdfTranslator(private val fonts: FontProvider) {
             }
             segs.clear()
         }
+        /** Glyphs drawn with a font that has no Unicode mapping, and pictures of text lines: text only readable visually. */
+        val unmapped = ArrayList<Unmapped>()
+
+        /** An image drawn as one line of text (short and wide): some exports turn text into such pictures. */
+        private fun pictureOfText(operands: MutableList<org.apache.pdfbox.cos.COSBase>?) {
+            val nm = operands?.firstOrNull() as? COSName ?: return
+            val x = runCatching { resources?.getXObject(nm) }.getOrNull() as? org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject ?: return
+            val m = graphicsState.currentTransformationMatrix
+            val box = currentPage.cropBox
+            val xs = listOf(m.translateX, m.translateX + m.scaleX, m.translateX + m.shearX, m.translateX + m.scaleX + m.shearX)
+            val ys = listOf(m.translateY, m.translateY + m.shearY, m.translateY + m.scaleY, m.translateY + m.shearY + m.scaleY)
+            val w = xs.max() - xs.min(); val h = ys.max() - ys.min()
+            if (h < 5f || h > 40f || w < h * 2.5f) return
+            if (x.width * x.height > 4_000_000) return
+            unmapped.add(Unmapped(currentPageNo - 1, xs.min() - box.lowerLeftX, box.upperRightY - ys.max(), xs.max() - box.lowerLeftX, box.upperRightY - ys.min(), opIndex, null, picture = true))
+        }
+        override fun showGlyph(trm: org.apache.pdfbox.util.Matrix, font: org.apache.pdfbox.pdmodel.font.PDFont, code: Int, unicode: String?, displacement: org.apache.pdfbox.util.Vector) {
+            if ((unicode == null || unicode.isEmpty()) && font !is org.apache.pdfbox.pdmodel.font.PDSimpleFont) {
+                val box = currentPage.cropBox
+                val h = trm.scalingFactorY; val w = displacement.x * trm.scalingFactorX
+                val x = trm.translateX - box.lowerLeftX; val y = box.upperRightY - trm.translateY
+                unmapped.add(Unmapped(currentPageNo - 1, x, y - h * 0.8f, x + w, y + h * 0.2f, if (depth == 0) opIndex else -1, forms.lastOrNull()))
+            }
+            super.showGlyph(trm, font, code, unicode, displacement)
+        }
         override fun processTextPosition(text: TextPosition) {
-            val c = try { graphicsState.nonStrokingColor.toRGB() } catch (_: Exception) { 0 }
+            // Masked text: its own colour is the mask's (often white); the visible text is dark grey.
+            val c = if (inMask > 0) 0x505050 else try { graphicsState.nonStrokingColor.toRGB() } catch (_: Exception) { 0 }
             colorOf[text] = c
             val op = if (depth == 0) opIndex else -1
             // Diacritics drawn separately get merged into the previous glyph by the stripper:
@@ -203,6 +253,8 @@ class PdfTranslator(private val fonts: FontProvider) {
     private val lineOps = IdentityHashMap<TextLine, IntArray>()
     private var opCounts: Map<Int, Int> = emptyMap()
     private var opDisps: Map<Int, Map<Int, Float>> = emptyMap()
+    /** Per page, glyphs whose letters can't be extracted (see [translate]'s ocr). */
+    var unmappedGlyphs: Map<Int, List<Unmapped>> = emptyMap(); private set
     /** Pages whose content couldn't be read (left untranslated). */
     val skippedPages = ArrayList<Int>()
     /** Rules (table borders, box edges) per page from the last [extract]. */
@@ -223,6 +275,7 @@ class PdfTranslator(private val fonts: FontProvider) {
             try { s.getText(doc) } catch (e: Exception) { if (e is InterruptedException) throw e; skippedPages.add(i - 1) }
         }
         lineOps.clear(); lineForms.clear(); lineAnchor.clear(); skippedPages.clear()
+        unmappedGlyphs = s.unmapped.groupBy { it.page }
         opCounts = s.opCount; opDisps = s.disps
         pageRules = s.rules.mapValues { (_, v) -> Rules(v.first, v.second) }
         class Part(val page: Int, val ps: List<TextPosition>, val colors: List<Int>) {
@@ -359,10 +412,39 @@ class PdfTranslator(private val fonts: FontProvider) {
      * Translates [input] into [output]. Returns stats; [PdfStats.scanned] is true when pages have
      * no text layer (the caller should OCR them instead).
      */
-    fun translate(input: File, output: OutputStream, translator: TextTranslator, cancel: () -> Boolean = { false }, progress: (Int, Int) -> Unit = { _, _ -> }): PdfStats {
+    /**
+     * [ocr]: reads a page image (page index → lines in page points). Used only for pages with text
+     * whose font carries no letter mapping (it looks right but can't be extracted): those lines are
+     * read visually, then translated and replaced like any other text.
+     */
+    fun translate(input: File, output: OutputStream, translator: TextTranslator, cancel: () -> Boolean = { false },
+                  ocr: ((Int) -> List<OcrLine>)? = null, progress: (Int, Int) -> Unit = { _, _ -> }): PdfStats {
         PDDocument.load(input).use { doc ->
             if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
-            val lines = extract(doc)
+            val lines = extract(doc).toMutableList()
+            if (ocr != null) for ((page, glyphs) in unmappedGlyphs) {
+                if (cancel()) throw InterruptedException("cancelled")
+                if (glyphs.count { !it.picture } < 3 && glyphs.none { it.picture }) continue
+                val read = runCatching { ocr(page) }.getOrDefault(emptyList())
+                val extracted = lines.filter { it.page == page }
+                for (o in read) {
+                    if (o.text.isBlank()) continue
+                    val ocx = (o.left + o.right) / 2; val ocy = (o.top + o.bottom) / 2
+                    // Never a second copy of text that was extracted normally.
+                    if (extracted.any { ocy in it.top..it.bottom && minOf(o.right, it.right) - maxOf(o.left, it.left) > (o.right - o.left) * 0.5f }) continue
+                    // Only what the extracted text is missing: OCR lines over unreadable glyphs or pictures of text.
+                    val inside = glyphs.filter { g ->
+                        if (g.picture) ocy >= g.top - 3 && ocy <= g.bottom + 3 && minOf(o.right, g.right) - maxOf(o.left, g.left) > 0.4f * minOf(o.right - o.left, g.right - g.left)
+                        else { val cx = (g.left + g.right) / 2; val cy = (g.top + g.bottom) / 2; cx >= o.left - 2 && cx <= o.right + 2 && cy >= o.top - 2 && cy <= o.bottom + 2 }
+                    }
+                    if (inside.isEmpty() || (inside.none { it.picture } && inside.size < 2)) continue
+                    val h = (o.bottom - o.top).coerceAtLeast(4f)
+                    val tl = TextLine(page, o.left, o.top, o.right, o.bottom, o.text, fontSize = h * 0.78f, color = 0xFF333333.toInt())
+                    lineOps[tl] = inside.map { it.op }.distinct().toIntArray()
+                    inside.mapNotNull { it.form }.distinct().takeIf { it.isNotEmpty() }?.let { lineForms[tl] = it }
+                    lines.add(tl)
+                }
+            }
             val textPages = lines.map { it.page }.toSet()
             if (lines.isEmpty()) { doc.save(output); return PdfStats(doc.numberOfPages, 0, 0, true) }
             val blocks = Layout.blocks(lines, rules = ::rulesOf)
@@ -472,6 +554,7 @@ class PdfTranslator(private val fonts: FontProvider) {
             if (t is Operator) {
                 index++
                 val n = t.name
+                if (n == "Do" && only != null && index in only) { operands.clear(); continue } // a picture of text being replaced
                 if ((n == "Tj" || n == "TJ" || n == "'" || n == "\"") && (only == null || index in only)) {
                     // ' and " also move to the next line (" also sets word and character spacing).
                     if (n == "\"" && operands.size >= 3) { kept.add(operands[0]); kept.add(Operator.getOperator("Tw")); kept.add(operands[1]); kept.add(Operator.getOperator("Tc")) }

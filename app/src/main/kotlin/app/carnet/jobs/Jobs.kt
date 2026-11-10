@@ -52,6 +52,15 @@ class Jobs(private val context: Context) {
 
     fun cancel(id: String) { cancels[id]?.set(true); running[id]?.cancel() }
 
+    /** Reads one PDF page visually (for text whose font has no letter mapping), in page points. */
+    private fun ocrPage(pdf: File, page: Int): List<app.carnet.pdf.PdfTranslator.OcrLine> {
+        val (bmp, wPt, _) = app.carnet.convert.Converters.renderPageWithSize(pdf, page, 2000) ?: return emptyList()
+        val k = wPt / bmp.width
+        val (lines, _) = kotlinx.coroutines.runBlocking { context.app.scanner.lines(bmp) }
+        bmp.recycle()
+        return lines.map { l -> app.carnet.pdf.PdfTranslator.OcrLine(l.left * k, l.top * k, l.right * k, l.bottom * k, l.text) }
+    }
+
     fun displayName(uri: Uri): String {
         if (uri.scheme == "file") return File(uri.path!!).name
         return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -93,7 +102,7 @@ class Jobs(private val context: Context) {
                     ext == "pdf" -> {
                         val out = File(dir, "result.pdf")
                         val stats = context.app.engine.exclusive(sample) { tr ->
-                            out.outputStream().use { PdfTranslator(AndroidFonts(context)).translate(src, it, tr, { cancel.get() }) { d, t -> progress("Translating").update(d, t) } }
+                            out.outputStream().use { PdfTranslator(AndroidFonts(context)).translate(src, it, tr, { cancel.get() }, ocr = { page -> ocrPage(src, page) }) { d, t -> progress("Translating").update(d, t) } }
                         }
                         if (stats.scanned) {
                             // No text layer: OCR each page image instead.

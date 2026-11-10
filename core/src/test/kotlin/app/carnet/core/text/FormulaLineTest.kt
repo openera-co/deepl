@@ -24,3 +24,13 @@ class FormulaWordsTest {
         kotlin.test.assertTrue(segs.any { it.translatable && it.text == "Équation bilan" }, segs.toString())
     }
 }
+
+class AddressGuardTest {
+    @Test
+    fun emailsAndUrlsAreCopied() {
+        val tr = app.carnet.core.mt.TextTranslator({ s, _ -> s.map { it.replace("greffe", "registry").replace("ta-toulon", "TA-Toulon") } })
+        val out = tr.translate("Email : greffe.ta-toulon@juradm.fr et le site www.telerecours.fr pour en savoir plus.")
+        kotlin.test.assertTrue("greffe.ta-toulon@juradm.fr" in out, out)
+        kotlin.test.assertTrue("www.telerecours.fr" in out, out)
+    }
+}

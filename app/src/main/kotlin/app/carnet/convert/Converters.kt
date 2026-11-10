@@ -89,6 +89,20 @@ object Converters {
     }
 
     /** Renders one page for previews. */
+    /** A page as an image plus its size in points (for mapping image positions back to the page). */
+    fun renderPageWithSize(input: File, index: Int, widthPx: Int): Triple<Bitmap, Float, Float>? = runCatching {
+        PdfRenderer(ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY)).use { r ->
+            if (index !in 0 until r.pageCount) return null
+            r.openPage(index).use { p ->
+                val scale = widthPx.toFloat() / p.width
+                val bmp = Bitmap.createBitmap(widthPx, (p.height * scale).toInt(), Bitmap.Config.ARGB_8888)
+                bmp.eraseColor(Color.WHITE)
+                p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                Triple(bmp, p.width.toFloat(), p.height.toFloat())
+            }
+        }
+    }.getOrNull()
+
     fun renderPage(input: File, index: Int, widthPx: Int): Bitmap? = runCatching {
         PdfRenderer(ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY)).use { r ->
             if (r.pageCount == 0) return null

@@ -258,7 +258,8 @@ class TextTranslator(
         private val separator = Regex("\\s+[—–|·•/-]\\s+")
         private val TOKENS = listOf("ZQX", "ZQY", "ZQW", "ZQV", "ZQK", "ZQJ")
         private val SHIELDS = listOf("QZA", "QZB", "QZC", "QZD", "QZE", "QZF")
-        private val foreign = Regex("[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}\\p{IsDevanagari}\\p{IsArabic}\\p{IsHebrew}\\p{IsThai}\\p{IsBengali}\\p{IsTamil}][\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}\\p{IsDevanagari}\\p{IsArabic}\\p{IsHebrew}\\p{IsThai}\\p{IsBengali}\\p{IsTamil}\\p{M} 、・，]*")
+        /** Copied through untouched: emails, web addresses, and text in other scripts. */
+        private val foreign = Regex("[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+|(?:https?://|www\\.)[^\\s<>\"]+[^\\s<>\".,;:!?)»]|[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}\\p{IsDevanagari}\\p{IsArabic}\\p{IsHebrew}\\p{IsThai}\\p{IsBengali}\\p{IsTamil}][\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}\\p{IsDevanagari}\\p{IsArabic}\\p{IsHebrew}\\p{IsThai}\\p{IsBengali}\\p{IsTamil}\\p{M} 、・，]*")
         private val frArticle = Regex("^(?i)(?:(?:un|une|le|la|les|des|du|de la)\\s+|(?:l|de l)['’])")
         private val enArticle = Regex("^(?i)(a|an|the|some)\\s+")
 
