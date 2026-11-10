@@ -107,12 +107,15 @@ class XlsxReader(private val pkg: ZipPackage) {
         val rels = HashMap<String, String>()
         pkg["xl/_rels/workbook.xml.rels"]?.let { b -> val d = Xml.parse(b); val nl = d.getElementsByTagName("Relationship"); for (i in 0 until nl.length) { val r = nl.item(i) as Element; rels[r.getAttribute("Id")] = r.getAttribute("Target") } }
         val sections = ArrayList<Section>()
+        val styles = XlsxStyles(pkg["xl/styles.xml"]?.let { Xml.parse(it) }, S)
         for (sheet in Xml.all(wb, S, "sheet")) {
             val rid = sheet.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id")
             val target = rels[rid] ?: continue
             val path = if (target.startsWith("/")) target.substring(1) else "xl/$target"
             val d = Xml.parse(pkg[path] ?: continue)
             val grid = HashMap<Pair<Int, Int>, String>()
+            val cellXf = HashMap<Pair<Int, Int>, Int>()
+            val numericCells = HashSet<Pair<Int, Int>>()
             var maxR = 0; var maxC = 0
             for (c in Xml.all(d, S, "c")) {
                 val ref = c.getAttribute("r")
@@ -120,25 +123,111 @@ class XlsxReader(private val pkg: ZipPackage) {
                 val row = ref.dropWhile { it.isLetter() }.toIntOrNull()?.minus(1) ?: continue
                 val t = c.getAttribute("t")
                 val v = Xml.child(c, S, "v")?.textContent
+                val xf = c.getAttribute("s").toIntOrNull() ?: 0
                 val value = when (t) {
                     "s" -> v?.toIntOrNull()?.let { shared.getOrNull(it) } ?: ""
                     "inlineStr" -> Xml.child(c, S, "is")?.textContent ?: ""
                     "b" -> if (v == "1") "TRUE" else "FALSE"
-                    else -> v?.let { num -> num.toDoubleOrNull()?.let { if (it == Math.floor(it) && kotlin.math.abs(it) < 1e15) it.toLong().toString() else "%.4g".format(it) } ?: num } ?: ""
+                    "str", "e" -> v ?: ""
+                    else -> v?.let { num -> num.toDoubleOrNull()?.let { styles.formatNumber(it, xf) } ?: num } ?: ""
                 }
-                if (value.isEmpty()) continue
-                grid[row to col] = value; maxR = maxOf(maxR, row); maxC = maxOf(maxC, col)
+                if (value.isEmpty() && xf == 0) continue
+                if (t.isEmpty() || t == "n") numericCells.add(row to col)
+                grid[row to col] = value; cellXf[row to col] = xf; maxR = maxOf(maxR, row); maxC = maxOf(maxC, col)
             }
-            if (grid.isEmpty()) continue
-            val widths = (0..maxC).map { c -> (0..maxR).maxOf { r -> (grid[r to c]?.length ?: 0) }.coerceIn(4, 40).toFloat() }
+            if (grid.values.all { it.isEmpty() }) continue
+            // The sheet's own column widths (in characters) when it has them.
+            val colW = HashMap<Int, Float>()
+            for (cl in Xml.all(d, S, "col")) {
+                val w = cl.getAttribute("width").toFloatOrNull() ?: continue
+                val a = cl.getAttribute("min").toIntOrNull() ?: continue; val b = cl.getAttribute("max").toIntOrNull() ?: a
+                for (i in a..minOf(b, a + 200)) colW[i - 1] = w
+            }
+            val widths = (0..maxC).map { c -> colW[c]?.coerceIn(2f, 80f) ?: (0..maxR).maxOf { r -> (grid[r to c]?.length ?: 0) }.coerceIn(4, 40).toFloat() }
             val st = CharStyle(size = 9f, font = "Calibri")
-            val rows = (0..maxR).map { r -> Row((0..maxC).map { c -> Cell(listOf(Paragraph(listOf(TextRun(grid[r to c] ?: "", if (r == 0) st.copy(bold = true) else st)), ParaStyle(spaceAfter = 0f)))) }, r == 0) }
+            val rows = (0..maxR).map { r -> Row((0..maxC).map { c ->
+                val (cs, fill) = styles.cell(cellXf[r to c] ?: 0, st)
+                Cell(listOf(Paragraph(listOf(TextRun(grid[r to c] ?: "", cs)), ParaStyle(spaceAfter = 0f, align = styles.align(cellXf[r to c] ?: 0, (r to c) in numericCells)))), shading = fill)
+            }, r == 0) }
             val landscape = widths.sum() > 60
             val page = if (landscape) PageSetup(841.9f, 595.3f, 36f, 36f, 36f, 36f) else PageSetup(marginLeft = 36f, marginRight = 36f, marginTop = 48f, marginBottom = 48f)
             val title = Paragraph(listOf(TextRun(sheet.getAttribute("name"), CharStyle(bold = true, size = 13f, font = "Calibri"))), ParaStyle(spaceAfter = 6f))
             sections.add(Section(page, listOf(title, Table(rows, widths))))
         }
         return DocModel(sections.ifEmpty { listOf(Section()) })
+    }
+}
+
+/** Number formats (dates), fonts, fills and alignment of an .xlsx's cell styles. */
+class XlsxStyles(doc: org.w3c.dom.Document?, private val S: String) {
+    private class Xf(val numFmt: Int, val font: Int, val fill: Int, val align: String?)
+    private val xfs = ArrayList<Xf>()
+    private val fmts = HashMap<Int, String>()
+    private val fonts = ArrayList<Triple<Boolean, Boolean, Int?>>()
+    private val fills = ArrayList<Int?>()
+
+    init {
+        if (doc != null) {
+            for (f in Xml.all(doc, S, "numFmt")) f.getAttribute("numFmtId").toIntOrNull()?.let { fmts[it] = f.getAttribute("formatCode") }
+            Xml.all(doc, S, "fonts").firstOrNull()?.let { fs -> for (f in Xml.children(fs).filter { it.localName == "font" })
+                fonts.add(Triple(Xml.child(f, S, "b") != null, Xml.child(f, S, "i") != null, Xml.child(f, S, "color")?.getAttribute("rgb")?.let { argb(it) })) }
+            Xml.all(doc, S, "fills").firstOrNull()?.let { fs -> for (f in Xml.children(fs).filter { it.localName == "fill" }) {
+                val pf = Xml.child(f, S, "patternFill")
+                fills.add(if (pf?.getAttribute("patternType") == "solid") Xml.child(pf, S, "fgColor")?.getAttribute("rgb")?.let { argb(it) } else null)
+            } }
+            Xml.all(doc, S, "cellXfs").firstOrNull()?.let { cx -> for (x in Xml.children(cx).filter { it.localName == "xf" })
+                xfs.add(Xf(x.getAttribute("numFmtId").toIntOrNull() ?: 0, x.getAttribute("fontId").toIntOrNull() ?: 0, x.getAttribute("fillId").toIntOrNull() ?: 0,
+                    Xml.child(x, S, "alignment")?.getAttribute("horizontal")?.ifEmpty { null })) }
+        }
+    }
+
+    private fun argb(v: String): Int? = when (v.length) { 8 -> v.toLongOrNull(16)?.toInt()?.let { it or 0xFF000000.toInt() }; 6 -> v.toIntOrNull(16)?.let { it or 0xFF000000.toInt() }; else -> null }
+
+    fun cell(xf: Int, base: CharStyle): Pair<CharStyle, Int?> {
+        val x = xfs.getOrNull(xf) ?: return base to null
+        val f = fonts.getOrNull(x.font)
+        val s = if (f == null) base else base.copy(bold = f.first, italic = f.second, color = f.third?.takeIf { it != 0xFF000000.toInt() } ?: base.color)
+        return s to fills.getOrNull(x.fill)
+    }
+
+    fun align(xf: Int, numeric: Boolean): HAlign = when (xfs.getOrNull(xf)?.align) { "center", "centerContinuous" -> HAlign.CENTER; "right" -> HAlign.RIGHT; "left" -> HAlign.LEFT
+        else -> if (numeric) HAlign.RIGHT else HAlign.LEFT } // Excel's "General": numbers and dates on the right
+
+    /** Dates (built-in formats 14–22, 45–47 and custom codes with d/m/y) as dates; other numbers plainly. */
+    fun formatNumber(v: Double, xf: Int): String {
+        val id = xfs.getOrNull(xf)?.numFmt ?: 0
+        val code = fmts[id]
+        val isDate = id in 14..22 || id in 45..47 || (code != null && Regex("(?i)[dy]|m{3,}").containsMatchIn(code.replace(Regex("\\[[^]]*]|\"[^\"]*\""), "")))
+        if (isDate && v > 0 && v < 2958466) {
+            val day = java.time.LocalDate.of(1899, 12, 30).plusDays(kotlin.math.floor(v).toLong())
+            val secs = ((v - kotlin.math.floor(v)) * 86400).toLong()
+            val pattern = when {
+                id == 14 || code == null -> "dd/MM/yyyy"
+                else -> javaPattern(code)
+            }
+            return runCatching { day.atStartOfDay().plusSeconds(secs).format(java.time.format.DateTimeFormatter.ofPattern(pattern)) }.getOrElse { day.toString() }
+        }
+        if (code != null && code.contains('%')) return "%.${code.substringAfter('.', "").count { it == '0' }}f%%".format(v * 100)
+        return if (v == kotlin.math.floor(v) && kotlin.math.abs(v) < 1e15) v.toLong().toString() else "%.4g".format(v)
+    }
+
+    private fun javaPattern(code: String): String {
+        val c = code.replace(Regex("\\[[^]]*]"), "").replace("\\", "").replace("\"", "'").substringBefore(';')
+        val hasTime = c.contains('h', true)
+        val sb = StringBuilder(); var i = 0
+        while (i < c.length) {
+            val ch = c[i]; var j = i; while (j < c.length && c[j].equals(ch, true)) j++
+            val run = j - i
+            sb.append(when (ch.lowercaseChar()) {
+                'y' -> if (run <= 2) "yy" else "yyyy"
+                'd' -> when (run) { 1 -> "d"; 2 -> "dd"; 3 -> "EEE"; else -> "EEEE" }
+                'm' -> if (hasTime && (sb.endsWith("H:") || sb.endsWith("HH:") || c.getOrNull(j) == ':' && false)) "mm" else when (run) { 1 -> "M"; 2 -> "MM"; 3 -> "MMM"; else -> "MMMM" }
+                'h' -> if (run == 1) "H" else "HH"
+                's' -> "ss"
+                else -> ch.toString().repeat(run)
+            }); i = j
+        }
+        return sb.toString()
     }
 }
 
