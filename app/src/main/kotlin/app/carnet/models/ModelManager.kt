@@ -85,7 +85,8 @@ class ModelManager(private val context: Context) {
             ModelFile("vision.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.mmproj-Q8_0.gguf", 591377600, "482f68be8823dfdfb3561c22cdd1c0f617d0d5e6efe9c323cc6428a4331dba01"),
         )),
         ModelSpec("whisper-base", "Offline speech", "", listOf(
-            ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin", 59707625, "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"),
+            // Whisper base fine-tuned on French (qanastek, Apache-2.0): 29.9% vs 35.4% WER on French FLEURS (tools/speech).
+            ModelFile("model.bin", "https://github.com/openera-co/deepl/releases/download/models-v2/whisper-base-fr__model.bin", 59707625, "ec2e04c1004bb608ece301fb1a853a81a6b04ec911681a48ed4f8dcefdf539bf"),
         )),
         ModelSpec("whisper-small", "Offline speech · better", "", listOf(
             ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", 190085487, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"),
