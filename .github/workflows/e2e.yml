@@ -15,7 +15,7 @@ on:
 permissions:
   contents: write
 
-concurrency: { group: e2e, cancel-in-progress: true }
+concurrency: { group: e2e, cancel-in-progress: false }
 
 jobs:
   e2e:

@@ -141,10 +141,12 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val french = blocks.joinToString("\n\n") { it.text }
         onStage("translating")
         val ling = blocks.filter { Segmenter.isLinguistic(it.text) }
+        val tTr = System.nanoTime()
         val english = if (ling.isEmpty()) emptyList() else engine.translate(ling.map { it.text })
+        timing.measure("translate_ms", (System.nanoTime() - tTr) / 1_000_000).measure("blocks", ling.size)
         val trMap = HashMap<Block, String>(); ling.forEachIndexed { i, b -> trMap[b] = english[i] }
         onStage("drawing")
-        val out = render(bmp, blocks, trMap, if (angles.isEmpty()) 0f else angles.sorted()[angles.size / 2])
+        val out = timing.span("draw") { render(bmp, blocks, trMap, if (angles.isEmpty()) 0f else angles.sorted()[angles.size / 2]) }
         timing.measure("lines", lines.size).measure("pixels", bmp.width.toLong() * bmp.height).ok()
         ScanPage(bmp, out, french, blocks.joinToString("\n\n") { trMap[it] ?: it.text }, blocks.size)
     }
