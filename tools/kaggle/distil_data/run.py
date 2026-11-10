@@ -57,12 +57,14 @@ def main():
     for eager in (False, True):
         try:
             llm = LLM(model="stelterlab/Mistral-Small-24B-Instruct-2501-AWQ", dtype="float16", quantization="awq", tensor_parallel_size=2,
-                      max_model_len=1536, gpu_memory_utilization=0.92, enforce_eager=eager, max_num_seqs=128)
+                      max_model_len=1280, gpu_memory_utilization=0.84, enforce_eager=eager, max_num_seqs=64)
             break
         except Exception as e: print("load failed eager=%s: %s" % (eager, str(e)[:300]), flush=True)
     sp = SamplingParams(temperature=0, max_tokens=400)
     # Alternate directions in chunks so both get data whatever the time budget allows.
-    pos = {"fr": 0, "en": 0}; files = {l: open(f"{OUT}/pairs.{l}.jsonl", "a", encoding="utf-8") for l in pos}
+    # Resume after segments earlier runs already translated (same shuffled order).
+    start = int(os.environ.get("START", "4000"))
+    pos = {"fr": start, "en": start}; files = {l: open(f"{OUT}/pairs.{l}.jsonl", "a", encoding="utf-8") for l in pos}
     CH = 2000
     while time.time() - T0 < BUDGET:
         progressed = False
