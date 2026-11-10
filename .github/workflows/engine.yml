@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-24.04-arm, ubuntu-latest ]
+        os: [ ubuntu-24.04-arm ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
@@ -37,7 +37,10 @@ jobs:
             echo "ORT $m: $out BLEU $(sacrebleu tools/eval/data/flores300.en -i ort.$m.out -m bleu -b)" | tee -a results.txt
           done
       - name: CTranslate2
-        run: python tools/engine/ct2_bench.py tools/eval/data/flores300.fr tools/eval/data/flores300.en | tee -a results.txt
+        run: |
+          python tools/engine/ct2_bench.py tools/eval/data/flores300.fr tools/eval/data/flores300.en | tee -a results.txt
+          echo "-- OMP_WAIT_POLICY=PASSIVE" | tee -a results.txt
+          OMP_WAIT_POLICY=PASSIVE python tools/engine/ct2_bench.py tools/eval/data/flores300.fr tools/eval/data/flores300.en | tee -a results.txt
       - name: Summary
         if: always()
         run: |

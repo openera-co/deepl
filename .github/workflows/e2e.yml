@@ -3,7 +3,7 @@ name: End-to-end
 # The app on an emulator, used like a student: one-button model download, then every file in
 # testdata/e2e translated through the real job (Document/Scan screens). Timings, outputs and
 # side-by-side page renders (original | translated | app preview) are published to the
-# prerelease "e2e-latest".
+# prerelease "v0-e2e".
 on:
   workflow_dispatch:
     inputs:
@@ -53,6 +53,9 @@ jobs:
           sudo apt-get install -y -q libreoffice-writer libreoffice-calc libreoffice-impress fonts-dejavu fonts-liberation fonts-crosextra-carlito > /dev/null
           pip install -q pymupdf pillow
           mkdir -p e2e-out && python tools/e2e/render.py testdata/e2e e2e-out e2e-render | tee -a $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: e2e-results, path: "e2e-render/**" }
       - name: Publish
         if: always()
         env: { GH_TOKEN: "${{ github.token }}" }
@@ -61,5 +64,5 @@ jobs:
           cp ../e2e-out/report.json . 2>/dev/null || true
           (cd ../e2e-out && zip -q -r ../e2e-render/outputs.zip . ) || true
           cp ../e2e-logcat.txt . 2>/dev/null || true
-          gh release delete e2e-latest -y --cleanup-tag 2>/dev/null || true
-          gh release create e2e-latest * --prerelease --title "End-to-end test results" --notes "Commit ${{ github.sha }}. Not an app release." --target ${{ github.sha }}
+          gh release delete v0-e2e -y --cleanup-tag 2>/dev/null || true
+          gh release create v0-e2e * --prerelease --latest=false --title "End-to-end test results" --notes "Commit ${{ github.sha }}. Not an app release." --target ${{ github.sha }}

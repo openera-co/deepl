@@ -14,7 +14,7 @@ for name, hf in [("fr-en (best)", "Helsinki-NLP/opus-mt-tc-big-fr-en"), ("fr-en-
             subprocess.check_call(["ct2-transformers-converter", "--model", hf, "--output_dir", d, "--quantization", q], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         size = sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d)) // 2**20
         tok = AutoTokenizer.from_pretrained(hf)
-        for threads in [4, 2]:
+        for threads in [2, 1, 3, 4, 2]:
             tr = ctranslate2.Translator(d, device="cpu", intra_threads=threads, inter_threads=1, compute_type=q)
             toks = [tok.convert_ids_to_tokens(tok.encode(s)) for s in src]
             tr.translate_batch(toks[:8], beam_size=1)  # warm-up
