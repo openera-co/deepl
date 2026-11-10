@@ -131,10 +131,9 @@ class ModelManager(private val context: Context) {
             _status.value = catalog.associate { it.id to (_status.value[it.id]?.takeIf { s -> s !is ModelStatus.NotInstalled } ?: initialStatus(it)) }
         }
         refreshUpdates()
-        // Translation model updates (e.g. the switch to the faster engine) install themselves on Wi-Fi.
+        // Model updates (faster engine, retrained handwriting reader…) install themselves on Wi-Fi.
         val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
-        if (cm != null && !cm.isActiveNetworkMetered)
-            _updates.value.keys.filter { specOrNull(it)?.direction != null }.forEach { update(it) }
+        if (cm != null && !cm.isActiveNetworkMetered) _updates.value.keys.forEach { update(it) }
     }
 
     fun spec(id: String) = catalog.first { it.id == id }
