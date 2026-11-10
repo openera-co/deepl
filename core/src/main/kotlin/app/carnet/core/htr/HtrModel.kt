@@ -150,7 +150,26 @@ class HtrModel(private val source: ModelSource, threads: Int = Runtime.getRuntim
             if (prev != null && prev !== first) prev.close()
             first?.close(); empty.values.forEach { it.close() }; hidden.close()
         }
-        return outs.map { ids -> ids.joinToString("") { id -> vocab.getOrNull(id)?.takeIf { !(it.startsWith("<") && it.endsWith(">")) } ?: "" }.replace('▁', ' ').trim() }
+        return outs.map { ids -> decode(ids) }
+    }
+
+    /** Byte-level BPE vocabularies (Ġ = space, Ã© = é) are detected and decoded back to UTF-8. */
+    private val byteLevel = vocab.count { it.startsWith("Ġ") } > 100
+    private val byteOf: Map<Char, Int> by lazy {
+        // GPT-2's bytes_to_unicode table, inverted.
+        val bs = (33..126) + (161..172) + (174..255)
+        val m = HashMap<Char, Int>(); bs.forEach { m[it.toChar()] = it }
+        var n = 0
+        for (b in 0..255) if (b !in bs) { m[(256 + n).toChar()] = b; n++ }
+        m
+    }
+
+    private fun decode(ids: List<Int>): String {
+        val pieces = ids.map { id -> vocab.getOrNull(id)?.takeIf { !(it.startsWith("<") && it.endsWith(">")) } ?: "" }
+        if (!byteLevel) return pieces.joinToString("").replace('▁', ' ').trim()
+        val bytes = java.io.ByteArrayOutputStream()
+        for (p in pieces) for (c in p) { val b = byteOf[c]; if (b != null) bytes.write(b) else bytes.write(c.toString().toByteArray(Charsets.UTF_8)) }
+        return String(bytes.toByteArray(), Charsets.UTF_8).trim()
     }
 
     override fun close() { encoder.close(); decoder.close() }

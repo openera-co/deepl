@@ -37,6 +37,6 @@ for mid, title, purpose, direction, quality in MODELS:
         files.append({"name": f, "url": f"{base}/{mid}__{f}", "size": os.path.getsize(p), "sha256": sha(p)})
         shutil.copy(p, os.path.join(up, f"{mid}__{f}"))
     cat["models"].append({"id": mid, "title": title, "purpose": purpose, "direction": direction,
-                          "quality": quality, "recommended": quality == "best" or mid == "htr-fr", "files": files})
+                          "quality": quality, "recommended": quality == "best", "files": files})
 json.dump(cat, open(os.path.join(up, "models.json"), "w", encoding="utf-8"), indent=1, ensure_ascii=False)
 print(json.dumps({m["id"]: sum(x["size"] for x in m["files"]) // 1_000_000 for m in cat["models"]}))

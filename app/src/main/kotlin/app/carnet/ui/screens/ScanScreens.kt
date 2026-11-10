@@ -195,9 +195,18 @@ fun ScanScreen(nav: NavHostController, settings: AppSettings) {
                             modifier = Modifier.clip(CircleShape).background(if (i == mode) Color.White.copy(alpha = 0.16f) else Color.Transparent).tap { mode = i }.padding(horizontal = 14.dp, vertical = 8.dp))
                     }
                 }
-                if (mode == 1 && !ctx.app.scanner.handwritingReady && !ctx.app.models.isInstalled("handwriting")) {
-                    Text("Get the handwriting model for best results", color = Color(0xFFB9BCC3), fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 8.dp).tap { nav.navigate("models") })
+                if (mode == 1 && !ctx.app.scanner.handwritingReady && ctx.app.models.specOrNull(app.carnet.ocr.Scanner.HTR_ID) != null) {
+                    val st by ctx.app.models.status.collectAsState()
+                    val hs = st[app.carnet.ocr.Scanner.HTR_ID]
+                    Row(Modifier.padding(top = 10.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.14f))
+                        .tap { if (hs !is app.carnet.models.ModelStatus.Downloading) ctx.app.models.download(app.carnet.ocr.Scanner.HTR_ID) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Ic.Download, null, tint = Color.White, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp))
+                        Text(when (hs) {
+                            is app.carnet.models.ModelStatus.Downloading -> "Handwriting reader · ${if (hs.total > 0) hs.done * 100 / hs.total else 0}%"
+                            else -> "Get the handwriting reader · ${formatSize(ctx.app.models.spec(app.carnet.ocr.Scanner.HTR_ID).size)}"
+                        }, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
                 Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {

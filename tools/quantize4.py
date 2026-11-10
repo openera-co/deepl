@@ -1,4 +1,5 @@
-"""4-bit weight-only quantization (MatMulNBits, block-wise) of an exported Marian model, with int8 embeddings.
+"""4-bit weight-only quantization (MatMulNBits, block-wise) of an exported encoder-decoder model, with int8 embeddings.
+Works for Marian translation models and TrOCR handwriting models (accuracy level 1 keeps fp32 maths).
 The two decoders are quantized separately and then merged (shared weights stored once).
 quantize4.py <fp32Dir> <outDir> [block] [accuracyLevel]"""
 import sys, pathlib, onnx
@@ -14,8 +15,9 @@ def q4(name, out):
     q.process()
     tmp = dst / ("tmp_" + name)
     q.model.save_model_to_file(str(tmp), use_external_data_format=False)
-    quantize_dynamic(str(tmp), str(out), weight_type=QuantType.QInt8, op_types_to_quantize=["Gather"])
-    tmp.unlink()
+    if "--no-gather" in sys.argv: tmp.rename(out)
+    else: quantize_dynamic(str(tmp), str(out), weight_type=QuantType.QInt8, op_types_to_quantize=["Gather"])
+    if tmp.exists(): tmp.unlink()
 q4("encoder_model.onnx", dst / "encoder_model.int8.onnx")
 q4("decoder_model.onnx", dst / "dec.onnx")
 q4("decoder_with_past_model.onnx", dst / "decp.onnx")

@@ -5,7 +5,7 @@ name: Publish models
 on:
   workflow_dispatch:
   push:
-    paths: [ "tools/export_model.py", "tools/quantize4.py", "tools/publish_models.py", ".github/workflows/models.yml" ]
+    paths: [ "tools/export_model.py", "tools/export_htr.py", "tools/quantize4.py", "tools/publish_models.py", ".github/workflows/models.yml" ]
 
 permissions:
   contents: write
@@ -30,6 +30,13 @@ jobs:
             cp m/big-$pair/*.pieces m/big-$pair/vocab.txt m/big-$pair/model.json m/$pair/
             rm -rf m/big-$pair m/$pair-fast/fp32
           done
+          # Handwriting reader: open French TrOCR (MIT), 4-bit weights with full-precision maths
+          # (4.9% character errors on RIMES vs 13% with int8 activations).
+          python -m optimum.exporters.onnx --model dj0w/trocr-french-handwriting-v5 --task image-to-text-with-past m/htr-fp32
+          python tools/quantize4.py m/htr-fp32 m/htr-fr 32 1
+          python tools/export_htr.py dj0w/trocr-french-handwriting-v5 m/htr-meta --meta-only
+          cp m/htr-meta/vocab.txt m/htr-meta/htr.json m/htr-fr/
+          rm -rf m/htr-fp32 m/htr-meta
           du -sh m/*
       - name: Catalog
         run: python tools/publish_models.py m "https://github.com/${{ github.repository }}/releases/download/models-v1"

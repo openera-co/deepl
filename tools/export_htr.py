@@ -3,14 +3,21 @@ vocab.txt (one piece per id) and htr.json. usage: export_htr.py <model> <outDir>
 import json, os, subprocess, sys
 from pathlib import Path
 model, out = sys.argv[1], Path(sys.argv[2]); fp32 = out / "fp32"; out.mkdir(parents=True, exist_ok=True)
-if not (fp32 / "decoder_model_merged.onnx").exists():
+meta_only = "--meta-only" in sys.argv
+if not meta_only and not (fp32 / "decoder_model_merged.onnx").exists():
     subprocess.check_call([sys.executable, "-m", "optimum.exporters.onnx", "--model", model, "--task", "image-to-text-with-past", str(fp32)])
 from onnxruntime.quantization import quantize_dynamic, QuantType
-for n in ["encoder_model.onnx", "decoder_model_merged.onnx"]:
+for n in ([] if meta_only else ["encoder_model.onnx", "decoder_model_merged.onnx"]):
     dst = out / n.replace(".onnx", ".int8.onnx")
     if not dst.exists():
         quantize_dynamic(str(fp32 / n), str(dst), weight_type=QuantType.QInt8, per_channel=True, extra_options={"EnableSubgraph": True})
     print(n, os.path.getsize(fp32 / n) // 2**20, "MB ->", os.path.getsize(dst) // 2**20, "MB")
+if meta_only:
+    from huggingface_hub import hf_hub_download
+    fp32.mkdir(parents=True, exist_ok=True)
+    for f in ["tokenizer.json", "config.json", "generation_config.json", "preprocessor_config.json"]:
+        try: (fp32 / f).write_bytes(open(hf_hub_download(model, f), "rb").read())
+        except Exception: pass
 tok = json.load(open(fp32 / "tokenizer.json", encoding="utf-8"))
 pieces = [p for p, _ in tok["model"]["vocab"]] if tok["model"]["type"] == "Unigram" else [p for p, _ in sorted(tok["model"]["vocab"].items(), key=lambda kv: kv[1])]
 for a in tok.get("added_tokens", []):
