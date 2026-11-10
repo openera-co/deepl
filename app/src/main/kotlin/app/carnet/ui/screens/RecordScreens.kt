@@ -63,6 +63,7 @@ import app.carnet.data.ItemType
 import app.carnet.nativeai.Whisper
 import app.carnet.record.RecordService
 import app.carnet.record.Recorder
+import app.carnet.record.PhonePack
 import app.carnet.record.Segment
 import app.carnet.ui.BottomNav
 import app.carnet.ui.Btn
@@ -154,8 +155,9 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                             Text(if (Recorder.lang == "en") "This phone can't turn English speech into text" else "This phone can't turn French speech into text",
                                 color = pal.ink, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
                             Text("Audio is being recorded", style = Type.small, color = pal.muted)
-                            OfflineSpeechChip(Modifier.padding(top = 14.dp))
+                            if (st.phonePack == null || st.phonePack is PhonePack.Failed) OfflineSpeechChip(Modifier.padding(top = 14.dp))
                         }
+                        st.phonePack?.let { PhonePackCard(it, Modifier.padding(top = if (st.needsSpeechModel) 14.dp else 0.dp)) }
                         st.error?.let { Text(it, color = pal.danger, style = Type.small) }
                     }
                 }
@@ -179,6 +181,34 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
             }
         }
         BottomNav("record") { nav.tab(it) }
+    }
+}
+
+/** One tap to add French (or English) to the phone's own speech service, with progress. */
+@Composable
+fun PhonePackCard(p: PhonePack, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val fr = Recorder.lang != "en"
+    if (p is PhonePack.Failed) return
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(pal.accentSoft).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Ic.Mic, null, tint = pal.accent, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(if (fr) "Clearer French captions" else "Clearer English captions", color = pal.ink, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            when (p) {
+                is PhonePack.Downloading -> {
+                    Text(if (p.percent > 0) "Downloading · ${p.percent}%" else "Downloading…", style = Type.small, color = pal.muted)
+                    Spacer(Modifier.height(6.dp)); ProgressBar(p.percent / 100f, height = 4.dp, track = pal.surface)
+                }
+                PhonePack.Scheduled -> Text("Your phone will finish this on Wi-Fi", style = Type.small, color = pal.muted)
+                else -> Text("Offline · about 60 MB", style = Type.small, color = pal.muted)
+            }
+        }
+        if (p is PhonePack.Available) {
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.clip(CircleShape).background(pal.accent).tap { Recorder.getPhonePack(ctx) }.padding(horizontal = 16.dp, vertical = 9.dp)) {
+                Text("Get", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            }
+        }
     }
 }
 

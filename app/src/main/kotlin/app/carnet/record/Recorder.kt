@@ -60,8 +60,19 @@ data class RecState(
     val needsSpeechModel: Boolean = false,
     /** Stopped; the last words are still being written. */
     val finishing: Boolean = false,
+    /** The phone's own speech service can add this language (Google's offline pack): its download state. */
+    val phonePack: PhonePack? = null,
 ) {
     val elapsedMs: Long get() = if (!recording) 0 else ((if (paused) pausedAt else System.currentTimeMillis()) - startedAt - pausedTotal)
+}
+
+sealed class PhonePack {
+    /** Can be downloaded with one tap. */
+    object Available : PhonePack()
+    data class Downloading(val percent: Int) : PhonePack()
+    /** The phone will fetch it later (e.g. on Wi-Fi). */
+    object Scheduled : PhonePack()
+    object Failed : PhonePack()
 }
 
 enum class SpeechEngine { PHONE, CARNET }
@@ -141,6 +152,7 @@ object Recorder {
         _state.value = RecState(recording = true, startedAt = System.currentTimeMillis(), title = title, savedId = id, audio = ownMic, recognizer = phone)
         if (ownMic) startAudio()
         if (phone) main.post { listen() } else goOffline()
+        if (Build.VERSION.SDK_INT >= 33) checkPack()
     }
 
     private fun startAudio() {
@@ -234,8 +246,8 @@ object Recorder {
             if (_state.value.engine != SpeechEngine.PHONE) return
             if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) { _state.value = _state.value.copy(error = "Carnet needs the microphone. Allow it in Settings."); return }
             if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
-                // Ask Android to fetch the language for next time; carry on with the next option now.
-                if (Build.VERSION.SDK_INT >= 33 && onDevice) runCatching { recognizer?.triggerModelDownload(intent()) }
+                // The phone may be able to add the language: offered as one button, not a surprise dialog.
+                if (Build.VERSION.SDK_INT >= 33 && onDevice && _state.value.phonePack == null) _state.value = _state.value.copy(phonePack = PhonePack.Available)
                 nextRecognizer(); return
             }
             note("e$error")
@@ -280,6 +292,92 @@ object Recorder {
      * Switches to Carnet's own speech model. Called when the phone can't recognise the language, and
      * again from the screen once the model has finished downloading.
      */
+    /**
+     * Downloads the phone's own offline speech pack for the language (Google's, about 60 MB), with
+     * progress. When it's ready, a running recording moves over to it: it's the most accurate option
+     * and keeps up on any phone.
+     */
+    fun getPhonePack(c: Context) {
+        if (Build.VERSION.SDK_INT < 33) return
+        val ctx = c.applicationContext
+        if (!::appCtx.isInitialized) appCtx = ctx
+        main.post {
+            val sr = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) }.getOrNull()
+                ?: run { _state.value = _state.value.copy(phonePack = PhonePack.Failed); return@post }
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (lang == "en") "en-GB" else "fr-FR")
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            note("pack")
+            _state.value = _state.value.copy(phonePack = PhonePack.Downloading(0))
+            if (Build.VERSION.SDK_INT >= 34) {
+                runCatching {
+                    sr.triggerModelDownload(i, java.util.concurrent.Executors.newSingleThreadExecutor(), object : android.speech.ModelDownloadListener {
+                        override fun onProgress(completedPercent: Int) { _state.value = _state.value.copy(phonePack = PhonePack.Downloading(completedPercent)) }
+                        override fun onSuccess() { note("pack-ok"); main.post { sr.destroy(); switchToPhone() } }
+                        override fun onScheduled() { note("pack-later"); _state.value = _state.value.copy(phonePack = PhonePack.Scheduled); main.post { sr.destroy() } }
+                        override fun onError(error: Int) { note("pack-e$error"); _state.value = _state.value.copy(phonePack = PhonePack.Failed); main.post { sr.destroy() } }
+                    })
+                }.onFailure { app.carnet.diag.Diag.report(it, "record.pack"); _state.value = _state.value.copy(phonePack = PhonePack.Failed); sr.destroy() }
+            } else {
+                // Android 13: no progress reports. Check back every few seconds whether it arrived.
+                runCatching { sr.triggerModelDownload(i) }
+                sr.destroy()
+                pollPack(i, 0)
+            }
+        }
+    }
+
+    /** Whether the phone's on-device recogniser has the language, could add it, or is fetching it. */
+    private fun checkPack() {
+        main.post {
+            if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(appCtx)) return@post
+            val sr = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appCtx) }.getOrNull() ?: return@post
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (lang == "en") "en-GB" else "fr-FR")
+            val tag = if (lang == "en") "en" else "fr"
+            runCatching {
+                sr.checkRecognitionSupport(i, java.util.concurrent.Executors.newSingleThreadExecutor(), object : android.speech.RecognitionSupportCallback {
+                    override fun onSupportResult(r: android.speech.RecognitionSupport) {
+                        main.post { sr.destroy() }
+                        val st = _state.value
+                        if (!st.recording || st.phonePack != null) return
+                        when {
+                            r.installedOnDeviceLanguages.any { it.startsWith(tag) } -> Unit
+                            r.pendingOnDeviceLanguages.any { it.startsWith(tag) } -> { _state.value = st.copy(phonePack = PhonePack.Downloading(0)); pollPack(i, 0) }
+                            r.supportedOnDeviceLanguages.any { it.startsWith(tag) } -> _state.value = st.copy(phonePack = PhonePack.Available)
+                        }
+                    }
+                    override fun onError(error: Int) { main.post { sr.destroy() } }
+                })
+            }.onFailure { sr.destroy() }
+        }
+    }
+
+    private fun pollPack(i: Intent, n: Int) {
+        if (Build.VERSION.SDK_INT < 33 || n > 120) { if (n > 120) _state.value = _state.value.copy(phonePack = PhonePack.Scheduled); return }
+        main.postDelayed({
+            val sr = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appCtx) }.getOrNull() ?: return@postDelayed
+            sr.checkRecognitionSupport(i, java.util.concurrent.Executors.newSingleThreadExecutor(), object : android.speech.RecognitionSupportCallback {
+                override fun onSupportResult(r: android.speech.RecognitionSupport) {
+                    val tag = if (lang == "en") "en" else "fr"
+                    main.post { sr.destroy() }
+                    if (r.installedOnDeviceLanguages.any { it.startsWith(tag) }) main.post { switchToPhone() } else pollPack(i, n + 1)
+                }
+                override fun onError(error: Int) { main.post { sr.destroy() }; pollPack(i, n + 1) }
+            })
+        }, 5000)
+    }
+
+    /** The phone's on-device recogniser now has the language: use it (again) from here on. */
+    private fun switchToPhone() {
+        _state.value = _state.value.copy(phonePack = null)
+        if (!_state.value.recording) return
+        note("phone-again")
+        live = false
+        onDevice = true; failures = 0; deaf = 0
+        recognizer?.runCatching { destroy() }; recognizer = null
+        _state.value = _state.value.copy(engine = SpeechEngine.PHONE, needsSpeechModel = false, recognizer = true, partial = "", error = null)
+        listen()
+    }
+
     fun goOffline() {
         if (!_state.value.recording) return
         note(if (offlineReady(appCtx)) "carnet" else "needs-model")
@@ -362,7 +460,7 @@ object Recorder {
         var prompt = ""; var chunks = 0; var audioMs = 0L; var computeMs = 0L
         var rtf = prefs.getFloat("rtf_$model", -1f)
         try {
-            while (session == mine && (_state.value.recording || synchronized(liveBuf) { liveSamples } > RATE * 3 / 10)) {
+            while (session == mine && live && (_state.value.recording || synchronized(liveBuf) { liveSamples } > RATE * 3 / 10)) {
                 // After Stop, the words still buffered are transcribed once more before finishing.
                 if (!_state.value.recording) quietBlocks = 99
                 val chunk = takeChunk()
