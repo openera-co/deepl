@@ -12,7 +12,7 @@ adb shell chmod -R a+r /data/local/tmp/e2e
 adb shell "run-as app.carnet sh -c 'mkdir -p files/e2e/in && cp /data/local/tmp/e2e/* files/e2e/in/'"
 adb logcat -c
 adb shell am instrument -w -e class app.carnet.E2E -e quality "$q" app.carnet.test/androidx.test.runner.AndroidJUnitRunner | tail -20
-adb logcat -d | grep -E "CarnetE2E|AndroidRuntime|Carnet  " > e2e-logcat.txt
+adb logcat -d | grep -E "CarnetE2E|CarnetScan|CarnetCt2|AndroidRuntime|Carnet  " > e2e-logcat.txt
 mkdir -p e2e-out
 adb exec-out run-as app.carnet tar -C files/e2e/out -cf - . | tar -xf - -C e2e-out
 ls -la e2e-out

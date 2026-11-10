@@ -153,6 +153,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
 
     /** Redraws [blocks] with their translations onto a copy of [src]. */
     fun render(src: Bitmap, blocks: List<Block>, translations: Map<Block, String>, angle: Float): Bitmap {
+        val t0 = System.nanoTime()
         val w = src.width; val h = src.height
         val px = IntArray(w * h)
         src.getPixels(px, 0, w, 0, 0, w, h)
@@ -170,6 +171,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
                 Inpaint.eraseInk(px, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad, lbg, dilate = max(2, (l.height / 12).toInt()))
             }
         }
+        val tErase = System.nanoTime()
         val out = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, true)
         // 2) Draw the English in the same place and colour.
         val c = Canvas(out)
@@ -187,6 +189,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
             for (pl in placement.lines) for (seg in pl.segments) c.drawText(seg.text, seg.x, pl.baseline, paint)
             c.restore()
         }
+        android.util.Log.i("CarnetScan", "render ${w}x$h blocks=${blocks.size}: erase ${(tErase - t0) / 1_000_000} ms, draw ${(System.nanoTime() - tErase) / 1_000_000} ms")
         return out
     }
 
