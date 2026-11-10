@@ -461,19 +461,29 @@ class PdfTranslator(private val fonts: FontProvider) {
                 val extracted = lines.filter { it.page == page }
                 for (o in read) {
                     if (o.text.isBlank()) continue
-                    val ocx = (o.left + o.right) / 2; val ocy = (o.top + o.bottom) / 2
-                    // Never a second copy of text that was extracted normally.
-                    if (extracted.any { ocy in it.top..it.bottom && minOf(o.right, it.right) - maxOf(o.left, it.left) > (o.right - o.left) * 0.5f }) continue
+                    val ocy = (o.top + o.bottom) / 2
                     // Only what the extracted text is missing: OCR lines over unreadable glyphs or pictures of text.
                     val inside = glyphs.filter { g ->
                         if (g.picture) ocy >= g.top - 3 && ocy <= g.bottom + 3 && minOf(o.right, g.right) - maxOf(o.left, g.left) > 0.4f * minOf(o.right - o.left, g.right - g.left)
                         else { val cx = (g.left + g.right) / 2; val cy = (g.top + g.bottom) / 2; cx >= o.left - 2 && cx <= o.right + 2 && cy >= o.top - 2 && cy <= o.bottom + 2 }
                     }
                     if (inside.isEmpty() || (inside.none { it.picture } && inside.size < 2)) continue
-                    val h = (o.bottom - o.top).coerceAtLeast(4f)
-                    val tl = TextLine(page, o.left, o.top, o.right, o.bottom, o.text, fontSize = h * 0.78f, color = 0xFF333333.toInt())
-                    lineOps[tl] = inside.map { it.op }.distinct().toIntArray()
-                    inside.mapNotNull { it.form }.distinct().takeIf { it.isNotEmpty() }?.let { lineForms[tl] = it }
+                    // Extracted text on the same row (a line that is part picture, part text, like "AVIS D'A" +
+                    // "TTRIBUTION…") is replaced by the whole line as read, so it's translated as one sentence.
+                    val sameRow = extracted.filter { e -> ocy in e.top..e.bottom && minOf(o.right, e.right) - maxOf(o.left, e.left) > 0f && e in lines }
+                    if (sameRow.isNotEmpty() && inside.none { it.picture }) continue // a second copy of normal text
+                    // Real line height: the picture's box (OCR boxes hug the letters).
+                    val pics = inside.filter { it.picture }
+                    val top = (pics.map { it.top } + sameRow.map { it.top }).minOrNull() ?: o.top
+                    val bottom = (pics.map { it.bottom } + sameRow.map { it.bottom }).maxOrNull() ?: o.bottom
+                    val size = sameRow.map { it.fontSize }.maxOrNull() ?: ((bottom - top).coerceAtLeast(4f) * 0.75f)
+                    val left = minOf(o.left, sameRow.minOfOrNull { it.left } ?: o.left); val right = maxOf(o.right, sameRow.maxOfOrNull { it.right } ?: o.right)
+                    val style = sameRow.firstOrNull()
+                    val tl = TextLine(page, left, top, right, bottom, o.text, fontSize = size, bold = style?.bold ?: false,
+                        color = style?.color ?: 0xFF333333.toInt(), fontName = style?.fontName ?: "")
+                    lineOps[tl] = (inside.map { it.op } + sameRow.flatMap { (lineOps[it] ?: intArrayOf()).asIterable() }).distinct().toIntArray()
+                    (inside.mapNotNull { it.form } + sameRow.flatMap { lineForms[it] ?: emptyList() }).distinct().takeIf { it.isNotEmpty() }?.let { lineForms[tl] = it }
+                    lines.removeAll(sameRow.toSet())
                     lines.add(tl)
                 }
             }

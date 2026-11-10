@@ -107,7 +107,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
             val r = l.boundingBox ?: continue
             val h = r.height().toFloat()
             val t = fixWords(app.carnet.core.text.OcrFix.fix(l.text, french), french)
-            lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), t, h * 0.98f,
+            lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), t, h * 1.08f, // Android's sans has a smaller x-height than most print: a bit larger to look the same
                 runs = listOf(app.carnet.core.layout.StyledRun(t, Style()))))
             angles.add(l.angle)
         }
