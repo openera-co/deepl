@@ -48,6 +48,17 @@ data class ScanPage(
  * in the same place, colour and alignment, on a background matched to the paper.
  */
 class Scanner(private val context: Context, private val engine: Engine) {
+    /** French words the translation model knows, for fixing look-alike letters ("Jundi" → "lundi"). */
+    private var words: Pair<String, app.carnet.core.text.OcrWords>? = null
+    private fun frenchWords(): app.carnet.core.text.OcrWords? {
+        val mm = app.carnet.CarnetApp.instance.models; val spec = mm.translationModel("fr-en") ?: return null
+        val f = java.io.File(mm.dir(spec.id), "vocab.txt")
+        val key = spec.id + f.length()
+        words?.takeIf { it.first == key }?.let { return it.second }
+        return runCatching { f.useLines { app.carnet.core.text.OcrWords.fromVocab(it) } }.getOrNull()?.also { words = key to it }
+    }
+    private fun fixWords(t: String, french: Boolean) = if (french) frenchWords()?.fix(t) ?: t else t
+
     companion object { const val HTR_ID = "htr-fr" }
     private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
     private val sans by lazy { Typeface.createFromAsset(context.assets, "fonts/LiberationSans-Regular.ttf") }
@@ -95,7 +106,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
         for (b in blocks) for (l in b.lines) {
             val r = l.boundingBox ?: continue
             val h = r.height().toFloat()
-            val t = app.carnet.core.text.OcrFix.fix(l.text, french)
+            val t = fixWords(app.carnet.core.text.OcrFix.fix(l.text, french), french)
             lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), t, h * 0.98f,
                 runs = listOf(app.carnet.core.layout.StyledRun(t, Style()))))
             angles.add(l.angle)
@@ -125,7 +136,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val texts = m.recognize(crops)
         val french = app.carnet.core.text.LanguageGuess.guess(texts.joinToString(" ")) != "en"
         lines.mapIndexed { i, l ->
-            val t = app.carnet.core.text.OcrFix.fix(texts[i].ifBlank { l.text }, french)
+            val t = fixWords(app.carnet.core.text.OcrFix.fix(texts[i].ifBlank { l.text }, french), french)
             l.copy(text = t, runs = listOf(app.carnet.core.layout.StyledRun(t, Style())))
         }
     }
