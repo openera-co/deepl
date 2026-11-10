@@ -83,6 +83,15 @@ object Recorder {
     private var dir: File? = null
     private var segStart = 0L
     private var failures = 0
+    /** Recogniser rounds that heard nothing while the microphone clearly picked up speech. */
+    private var deaf = 0
+    @Volatile private var loudSinceListen = false
+    /** What happened this recording (no content): sent as one diagnostics event at Stop. */
+    private val trail = StringBuilder()
+    private fun note(s: String) {
+        if (trail.length >= 600 || trail.endsWith("$s ")) return
+        trail.append(s).append(' ')
+    }
     /** Phone recogniser attempts: the on-device one first, then the regular one. */
     private var onDevice = true
     private lateinit var appCtx: Context
@@ -115,7 +124,7 @@ object Recorder {
         if (_state.value.recording) return
         appCtx = c.applicationContext
         lang = if (appCtx.app.engine.direction == "en-fr") "en" else "fr"
-        failures = 0; onDevice = true; session++
+        failures = 0; deaf = 0; onDevice = true; session++; trail.setLength(0)
         appCtx.app.scope.launch { punct = appCtx.app.settings.flow.first().spokenPunctuation }
         val id = appCtx.app.library.newId()
         dir = appCtx.app.library.dir(id)
@@ -159,6 +168,7 @@ object Recorder {
     }
 
     private fun level(l: Float) {
+        if (l > 0.12f) loudSinceListen = true
         val st = _state.value
         _state.value = st.copy(level = l, levels = (st.levels + l).takeLast(48))
     }
@@ -186,18 +196,20 @@ object Recorder {
         val st = _state.value
         if (!st.recording || st.paused || st.engine != SpeechEngine.PHONE || !st.recognizer) return
         val useOnDevice = onDevice && Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(appCtx)
+        note(if (useOnDevice) "ondevice" else "regular")
         if (!useOnDevice && !SpeechRecognizer.isRecognitionAvailable(appCtx)) { goOffline(); return }
         val sr = recognizer ?: (if (useOnDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(appCtx)
         else SpeechRecognizer.createSpeechRecognizer(appCtx)).also { recognizer = it }
         sr.setRecognitionListener(listener)
         segStart = _state.value.elapsedMs
+        loudSinceListen = false
         try { sr.startListening(intent()) } catch (e: Exception) { app.carnet.diag.Diag.report(e, "record.listen"); nextRecognizer() }
     }
 
     /** The current phone recogniser can't do it: try the regular one, then Carnet's own. */
     private fun nextRecognizer() {
         recognizer?.runCatching { destroy() }; recognizer = null
-        failures = 0
+        failures = 0; deaf = 0
         if (onDevice && SpeechRecognizer.isRecognitionAvailable(appCtx)) {
             onDevice = false
             app.carnet.diag.Diag.breadcrumb("record: on-device recogniser unavailable, using the regular one")
@@ -219,8 +231,12 @@ object Recorder {
                 if (Build.VERSION.SDK_INT >= 33 && onDevice) runCatching { recognizer?.triggerModelDownload(intent()) }
                 nextRecognizer(); return
             }
+            note("e$error")
             val normal = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
             if (!normal) failures++
+            // "Heard nothing" again and again while the microphone hears speech means this recogniser
+            // can't understand the language (some phones report it this way): move on.
+            if (normal && loudSinceListen && _state.value.segments.isEmpty()) { if (++deaf >= 3) { note("deaf"); nextRecognizer(); return } }
             // Some recognisers can't take our shared audio stream: let them use their own microphone.
             if (failures == 4 && audio != null && Build.VERSION.SDK_INT >= 33) {
                 stopAudio()
@@ -229,8 +245,8 @@ object Recorder {
             // No match / timeout are normal pauses in dictation: just listen again.
             main.postDelayed({ restart() }, if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 400 else 60)
         }
-        override fun onResults(results: Bundle?) { failures = 0; commit(results); main.post { restart() } }
-        override fun onSegmentResults(segmentResults: Bundle) { failures = 0; commit(segmentResults) }
+        override fun onResults(results: Bundle?) { failures = 0; deaf = 0; commit(results); main.post { restart() } }
+        override fun onSegmentResults(segmentResults: Bundle) { failures = 0; deaf = 0; commit(segmentResults) }
         override fun onEndOfSegmentedSession() { main.post { restart() } }
         override fun onPartialResults(partialResults: Bundle?) {
             val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: return
@@ -259,6 +275,7 @@ object Recorder {
      */
     fun goOffline() {
         if (!_state.value.recording) return
+        note(if (offlineReady(appCtx)) "carnet" else "needs-model")
         main.post { recognizer?.runCatching { destroy() }; recognizer = null }
         pipeWrite?.runCatching { close() }; pipeWrite = null
         if (!offlineReady(appCtx)) {
@@ -412,6 +429,9 @@ object Recorder {
         val id = st.savedId ?: return null
         val dir = appCtx.app.library.dir(id)
         File(dir, "lang").writeText(lang)
+        app.carnet.diag.Diag.event("record.summary", mapOf("path" to trail.toString().trim().take(600), "lang" to lang,
+            "segments" to finalSegs.size.toString(), "seconds" to (duration / 1000).toString(), "sdk" to Build.VERSION.SDK_INT.toString(),
+            "service" to (runCatching { android.provider.Settings.Secure.getString(appCtx.contentResolver, "voice_recognition_service") }.getOrNull() ?: "none")))
         saveTranscript(File(dir, "transcript.json"), finalSegs)
         val meta = mapOf("duration" to duration.toString(), "segments" to finalSegs.size.toString(), "audio" to (wavFile != null).toString())
         appCtx.app.library.put(LibraryItem(id, ItemType.RECORDING, st.title, System.currentTimeMillis(), wavFile?.name, "transcript.json", meta))

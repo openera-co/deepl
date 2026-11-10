@@ -58,6 +58,18 @@ object Diag {
         }
     }
 
+    /** A noteworthy, non-error event with a few facts (never user content). */
+    fun event(name: String, facts: Map<String, String>) {
+        if (!on) return
+        runCatching {
+            Sentry.withScope { s ->
+                facts.forEach { (k, v) -> s.setExtra(k, v) }
+                s.setTag("event", name); s.level = SentryLevel.INFO
+                Sentry.captureMessage(name)
+            }
+        }
+    }
+
     fun breadcrumb(message: String) { if (on) runCatching { Sentry.addBreadcrumb(message) } }
 
     /** A timed operation ("translate.document", "ocr.page", "model.load"…) with numbers attached. */
