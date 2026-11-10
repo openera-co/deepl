@@ -195,8 +195,8 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val bodyOrig = bodySizes.getOrNull(bodySizes.size / 2) ?: 0f
         val isBody = { b: Block -> b.fontSize <= bodyOrig * 1.3f }
         val first = drawn.associateWith { b -> paint.typeface = if (isBold(src, b, colours[b]!!.first)) sansBold else sans; Layout.fit(b, translations[b]!!, measurer) }
-        val fitted = first.filterKeys(isBody).values.map { it.fontSize }.sorted()
-        val bodySize = fitted.getOrNull(fitted.size / 2)
+        // Capped at the original body size: blocks only get smaller when their own room requires it.
+        val bodySize = bodyOrig.takeIf { it > 0f }
         for (b in blocks) {
             val tr = translations[b] ?: continue
             val (bg, fg) = colours[b] ?: continue
