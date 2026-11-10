@@ -3,12 +3,21 @@
 #include <jni.h>
 #include <android/log.h>
 #include <ctranslate2/translator.h>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "CarnetCt2", __VA_ARGS__)
 #define JNI(ret, name) extern "C" JNIEXPORT ret JNICALL Java_app_carnet_nativeai_Ct2Lib_##name
+
+// OpenMP's default is to keep idle threads spinning, which on 4 ARM cores made 4 threads slower
+// than 2 (3.2 vs 11.6 lines/s); with passive waiting 4 threads give 14.3 (engine workflow). Must be
+// set before the OpenMP runtime starts, i.e. here.
+extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM*, void*) {
+    setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
+    return JNI_VERSION_1_6;
+}
 
 static void throwJava(JNIEnv* env, const char* msg) {
     env->ThrowNew(env->FindClass("java/lang/RuntimeException"), msg);

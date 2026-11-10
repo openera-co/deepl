@@ -110,11 +110,8 @@ class Engine(private val context: Context) {
         }
     }
 
-    /**
-     * CTranslate2 threads: on GitHub's 4-core ARM64 machines 2 threads beat 4 (11.5 vs 3.1 lines/s,
-     * the cores fight over memory bandwidth); phones have 2–4 big cores. Tuned by the engine workflow.
-     */
-    private fun ct2Threads(): Int = Runtime.getRuntime().availableProcessors().coerceIn(1, 2)
+    /** CTranslate2 threads (passive OpenMP waiting, see native-ct2): 4 on ARM64 gave 14.3 lines/s vs 6.9 for ONNX Runtime. */
+    private fun ct2Threads(): Int = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
 
     /** The translator for a direction, loading its model if needed. */
     suspend fun translator(dir: String = FR_EN): TextTranslator {
