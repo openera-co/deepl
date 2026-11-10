@@ -35,6 +35,9 @@
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Carnet">
+        <!-- Sentry is started by Diag.start (with the DSN and privacy options), never automatically:
+             auto-start without a DSN in the manifest throws and kills the app at launch. -->
+        <meta-data android:name="io.sentry.auto-init" android:value="false" />
 
         <activity
             android:name=".MainActivity"
