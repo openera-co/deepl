@@ -1,0 +1,45 @@
+name: Engine comparison
+
+# Same models, two C++ engines, on ARM64 and x86-64: ONNX Runtime (what the app uses, through its
+# real Kotlin pipeline) vs CTranslate2 (int8, built for these translation models). Speed and BLEU on
+# FLORES. Decides whether the app should switch its translation engine.
+on:
+  workflow_dispatch:
+  push:
+    paths: [ ".github/workflows/engine.yml", "tools/engine/**" ]
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04-arm, ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install
+        run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q "transformers<5" sentencepiece sacremoses ctranslate2 sacrebleu
+      - name: App's engine (ONNX Runtime, via the app's Kotlin pipeline)
+        run: |
+          base=https://github.com/${{ github.repository }}/releases/download/models-v1
+          for m in fr-en fr-en-fast; do
+            mkdir -p models/$m
+            for f in encoder_model.int8.onnx decoder_model_merged.int8.onnx source.pieces target.pieces vocab.txt model.json; do curl -sfL $base/${m}__$f -o models/$m/$f; done
+            out=$(./gradlew -q :core:bench -PbenchArgs="mt $PWD/models/$m $PWD/tools/eval/data/flores300.fr $PWD/ort.$m.out" 2>&1 | grep translated)
+            echo "ORT $m: $out BLEU $(sacrebleu tools/eval/data/flores300.en -i ort.$m.out -m bleu -b)" | tee -a results.txt
+          done
+      - name: CTranslate2
+        run: python tools/engine/ct2_bench.py tools/eval/data/flores300.fr tools/eval/data/flores300.en | tee -a results.txt
+      - name: Summary
+        if: always()
+        run: |
+          echo "### $(uname -m), $(nproc) cores: $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)" >> $GITHUB_STEP_SUMMARY
+          sed 's/^/    /' results.txt >> $GITHUB_STEP_SUMMARY
