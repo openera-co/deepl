@@ -95,44 +95,44 @@ model = VisionEncoderDecoderModel.from_pretrained(BASE).cuda()
 evaluate(model, rt_img, rt_txt, "before: RIMES test")
 evaluate(model, test_img, test_txt, "before: school lines, unseen fonts")
 
-# Labels must follow the convention the model was trained with, or fine-tuning teaches it a new one
-# and generation breaks (an earlier run: loss fell to 0.30 while RIMES CER went 5.7% → 76%).
-# Pick the one the untouched model already agrees with: lowest loss on real lines.
+# This transformers version computes VisionEncoderDecoder's loss as a causal-LM loss, which shifts the
+# labels a second time: the model learns to predict the token after next (two earlier runs: loss fell
+# while RIMES CER went 5.7% → 76–97%). The loss is computed here instead: decoder input = the start
+# token the model generates with (2) + labels[:-1], cross-entropy on labels directly.
 gc = model.generation_config
-start = gc.decoder_start_token_id if gc.decoder_start_token_id is not None else model.config.decoder_start_token_id
-model.config.decoder_start_token_id = start
-model.config.pad_token_id = proc.tokenizer.pad_token_id
+START = gc.decoder_start_token_id if gc.decoder_start_token_id is not None else model.config.decoder_start_token_id
+model.config.decoder_start_token_id = START; model.config.pad_token_id = proc.tokenizer.pad_token_id
 tok = proc.tokenizer
-def ids_for(t, strip_bos, add_eos):
-    ids = tok(t, add_special_tokens=False).input_ids if strip_bos else tok(t).input_ids
-    if strip_bos and add_eos: ids = ids + [tok.eos_token_id]
-    return ids[:95]
-conventions = {"default": (False, True), "no-bos": (True, True)}
-probe_i = list(rimes["validation"]["image"])[:64]; probe_t = list(rimes["validation"]["text"])[:64]
-def conv_loss(strip, eos):
-    model.eval(); tot = 0.0
-    for k in range(0, 64, 16):
-        pv = proc(images=[im.convert("RGB") for im in probe_i[k:k + 16]], return_tensors="pt").pixel_values.cuda()
-        labs = [ids_for(t, strip, eos) for t in probe_t[k:k + 16]]; m = max(map(len, labs))
-        lab = torch.tensor([l + [-100] * (m - len(l)) for l in labs]).cuda()
-        with torch.inference_mode(): tot += model(pixel_values=pv, labels=lab).loss.item()
-    return tot / 4
-losses = {n: conv_loss(*c) for n, c in conventions.items()}
-best = min(losses, key=losses.get); STRIP, EOS = conventions[best]
-log["label convention"] = {"losses": losses, "chosen": best, "decoder_start": start}; save_log(); print(log["label convention"], flush=True)
+def ids_for(t): return tok(t, max_length=95, truncation=True).input_ids  # <s> text </s>, as the model generates
+def seq_loss(m, pv, lab):
+    dec = torch.cat([torch.full((lab.size(0), 1), START, device=lab.device), lab[:, :-1]], 1).masked_fill(torch.cat([torch.zeros((lab.size(0), 1), dtype=torch.bool, device=lab.device), lab[:, :-1] == -100], 1), tok.pad_token_id)
+    logits = m(pixel_values=pv, decoder_input_ids=dec).logits
+    return torch.nn.functional.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), lab.reshape(-1), ignore_index=-100)
+probe_i = list(rimes["validation"]["image"])[:32]; probe_t = list(rimes["validation"]["text"])[:32]
+with torch.inference_mode():
+    pv = proc(images=[im.convert("RGB") for im in probe_i], return_tensors="pt").pixel_values.cuda()
+    labs = [ids_for(t) for t in probe_t]; mx = max(map(len, labs))
+    probe = seq_loss(model.eval(), pv, torch.tensor([l + [-100] * (mx - len(l)) for l in labs]).cuda()).item()
+log["probe loss before (should be < 1)"] = round(probe, 3); save_log(); print("probe loss", probe, flush=True)
+assert probe < 1.5, "labels still don't match the model"
+
+class CTrainer(Seq2SeqTrainer):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        loss = seq_loss(model, inputs["pixel_values"], inputs["labels"])
+        return (loss, None) if return_outputs else loss
 
 class Lines(torch.utils.data.Dataset):
     def __init__(self, imgs, txts): self.i, self.t = imgs, txts
     def __len__(self): return len(self.t)
     def __getitem__(self, k):
         pv = proc(images=self.i[k].convert("RGB"), return_tensors="pt").pixel_values[0]
-        ids = ids_for(self.t[k], STRIP, EOS); lab = ids + [-100] * (96 - len(ids))
+        ids = ids_for(self.t[k]); lab = ids + [-100] * (96 - len(ids))
         return {"pixel_values": pv, "labels": torch.tensor(lab)}
 tr = Lines(list(rimes["train"]["image"]) + syn_img, list(rimes["train"]["text"]) + syn_txt)
 args = Seq2SeqTrainingArguments(output_dir="/tmp/ckpt", per_device_train_batch_size=8, gradient_accumulation_steps=4, learning_rate=1e-5,
     num_train_epochs=2, warmup_ratio=0.05, weight_decay=0.01, fp16=True, logging_steps=100, save_strategy="no", eval_strategy="no",
     dataloader_num_workers=4, report_to=[], lr_scheduler_type="cosine", max_grad_norm=1.0)
-trainer = Seq2SeqTrainer(model=model, args=args, train_dataset=tr, data_collator=default_data_collator)
+trainer = CTrainer(model=model, args=args, train_dataset=tr, data_collator=default_data_collator)
 t0 = time.time(); trainer.train(); log["train_minutes"] = round((time.time() - t0) / 60, 1); save_log()
 model = trainer.model.cuda()
 evaluate(model, rt_img, rt_txt, "after: RIMES test")

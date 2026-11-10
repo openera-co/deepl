@@ -62,6 +62,15 @@ def run(sl, tl):
         def __getitem__(self, k):
             e = tok(srcs[k], text_target=tgts[k], truncation=True, max_length=256)
             return e
+    # Sanity check before hours of training: the untouched model should already agree with the teacher.
+    model.eval(); probe = []
+    for k in range(0, 64, 16):
+        b = tok([p["src"] for p in train[k:k + 16]], text_target=[p["tgt"] for p in train[k:k + 16]], return_tensors="pt", padding=True, truncation=True, max_length=256).to("cuda")
+        b["labels"][b["labels"] == tok.pad_token_id] = -100
+        with torch.inference_mode(): probe.append(model(**b).loss.item())
+    log[f"{sl}-{tl} probe loss before"] = round(sum(probe) / len(probe), 3); save()
+    assert log[f"{sl}-{tl} probe loss before"] < 4, "labels don't match the model"
+    model.train()
     args = Seq2SeqTrainingArguments(output_dir="/tmp/ck", per_device_train_batch_size=24, gradient_accumulation_steps=2, learning_rate=2e-5,
         num_train_epochs=1, warmup_ratio=0.03, weight_decay=0.01, fp16=True, logging_steps=200, save_strategy="no", report_to=[],
         lr_scheduler_type="linear", label_smoothing_factor=0.1, dataloader_num_workers=2, group_by_length=True)
