@@ -84,7 +84,10 @@ class ModelManager(private val context: Context) {
             ModelFile("model.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf", 2489909760, "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330"),
             ModelFile("vision.gguf", "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.mmproj-Q8_0.gguf", 591377600, "482f68be8823dfdfb3561c22cdd1c0f617d0d5e6efe9c323cc6428a4331dba01"),
         )),
-        ModelSpec("whisper-small", "Offline speech", "", listOf(
+        ModelSpec("whisper-base", "Offline speech", "", listOf(
+            ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin", 59707625, "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"),
+        )),
+        ModelSpec("whisper-small", "Offline speech · better", "", listOf(
             ModelFile("model.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", 190085487, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"),
         )),
         ModelSpec("whisper-turbo", "Offline speech · best", "", listOf(

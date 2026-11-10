@@ -58,6 +58,8 @@ data class RecState(
     val engine: SpeechEngine = SpeechEngine.PHONE,
     /** The phone can't recognise this language and the offline speech model isn't downloaded yet. */
     val needsSpeechModel: Boolean = false,
+    /** Stopped; the last words are still being written. */
+    val finishing: Boolean = false,
 ) {
     val elapsedMs: Long get() = if (!recording) 0 else ((if (paused) pausedAt else System.currentTimeMillis()) - startedAt - pausedTotal)
 }
@@ -71,7 +73,9 @@ enum class SpeechEngine { PHONE, CARNET }
  * mid-recording, without losing audio.
  */
 object Recorder {
-    const val LIVE_MODEL = "whisper-small"
+    /** One-tap download for live captions: fast on any phone. The better model is used live only where it keeps up. */
+    const val LIVE_MODEL = "whisper-base"
+    private const val BETTER = "whisper-small"
     private val _state = MutableStateFlow(RecState())
     val state: StateFlow<RecState> = _state
     private val main = Handler(Looper.getMainLooper())
@@ -105,7 +109,10 @@ object Recorder {
     private var liveSamples = 0
     private var liveStartMs = 0L
     @Volatile private var quietBlocks = 0
-    @Volatile private var noiseFloor = 0.01f
+    @Volatile private var noiseFloor = 0.003f
+    @Volatile private var maxRms = 0f
+    @Volatile private var chunkPeak = 0f
+    private var liveStats = ""
     private var worker: Thread? = null
     /** Bumped at every start and stop, so a worker still finishing can't touch another recording. */
     @Volatile private var session = 0
@@ -114,7 +121,7 @@ object Recorder {
         (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(c))
 
     private fun offlineReady(c: Context) = app.carnet.nativeai.NativeLib.whisperLoaded &&
-        c.app.models.isInstalled(LIVE_MODEL)
+        (c.app.models.isInstalled(LIVE_MODEL) || c.app.models.isInstalled(BETTER))
 
     /** The offline speech model can run in this build (shown as an option when the phone can't). */
     fun offlinePossible(c: Context) = c.app.models.supported(LIVE_MODEL)
@@ -124,7 +131,7 @@ object Recorder {
         if (_state.value.recording) return
         appCtx = c.applicationContext
         lang = if (appCtx.app.engine.direction == "en-fr") "en" else "fr"
-        failures = 0; deaf = 0; onDevice = true; session++; trail.setLength(0)
+        failures = 0; deaf = 0; onDevice = true; session++; trail.setLength(0); liveStats = ""; maxRms = 0f; noiseFloor = 0.003f
         appCtx.app.scope.launch { punct = appCtx.app.settings.flow.first().spokenPunctuation }
         val id = appCtx.app.library.newId()
         dir = appCtx.app.library.dir(id)
@@ -294,40 +301,68 @@ object Recorder {
 
     private fun feed(buf: ShortArray, n: Int, rms: Float) {
         // Slowly-adapting noise floor: a block is quiet when it's close to the room's background.
-        noiseFloor = if (rms < noiseFloor) rms.coerceAtLeast(0.002f) else noiseFloor * 0.995f + rms * 0.005f
-        val quiet = rms < maxOf(0.008f, noiseFloor * 2.2f)
+        // Quiet microphones are common (speech input has no gain boost), so everything is relative.
+        noiseFloor = if (rms < noiseFloor) rms.coerceAtLeast(0.0003f) else noiseFloor * 0.997f + rms * 0.003f
+        val quiet = rms < noiseFloor * 2.5f + 0.0005f
         quietBlocks = if (quiet) quietBlocks + 1 else 0
+        if (rms > maxRms) maxRms = rms
         val f = FloatArray(n) { buf[it] / 32768f }
         synchronized(liveBuf) {
-            // Don't keep long silences: only the last half second before speech starts.
+            // Don't keep long silences before speech starts.
             if (liveSamples == 0 && quiet) return
+            if (!quiet && rms > chunkPeak) chunkPeak = rms
             if (liveSamples == 0) liveStartMs = (_state.value.elapsedMs - 100).coerceAtLeast(0)
             liveBuf.add(f); liveSamples += n
         }
     }
 
-    private fun takeChunk(): Pair<FloatArray, Long>? = synchronized(liveBuf) {
+    private fun takeChunk(): Triple<FloatArray, Long, Float>? = synchronized(liveBuf) {
         val secs = liveSamples / RATE.toFloat()
         val pause = quietBlocks >= 6
-        if (!(secs >= (if (_state.value.recording) 2f else 0.5f) && pause) && secs < 10f) return null
+        if (!(secs >= (if (_state.value.recording) 2f else 0.3f) && pause) && secs < 10f) return null
         val out = FloatArray(liveSamples); var o = 0
         for (b in liveBuf) { b.copyInto(out, o); o += b.size }
         liveBuf.clear(); liveSamples = 0
-        out to liveStartMs
+        // Quiet phone microphones: bring speech up to a normal level for the model.
+        val peak = chunkPeak; chunkPeak = 0f
+        val gain = if (peak > 0f) (0.08f / peak).coerceIn(1f, 30f) else 1f
+        if (gain > 1.01f) for (i in out.indices) out[i] = (out[i] * gain).coerceIn(-1f, 1f)
+        Triple(out, liveStartMs, peak)
+    }
+
+    private val prefs by lazy { appCtx.getSharedPreferences("speech", Context.MODE_PRIVATE) }
+
+    /** The better model live only where it has kept up before (compute ÷ audio time below 0.6). */
+    private fun liveModel(): String? {
+        val mm = appCtx.app.models
+        val rtf = prefs.getFloat("rtf_$BETTER", -1f)
+        return when {
+            mm.isInstalled(BETTER) && rtf < 0.6f -> BETTER
+            mm.isInstalled(LIVE_MODEL) -> LIVE_MODEL
+            mm.isInstalled(BETTER) -> BETTER
+            else -> null
+        }
     }
 
     private fun runLive(mine: Int) {
         val mm = appCtx.app.models
-        val model = LIVE_MODEL
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
-        val h = runCatching { app.carnet.nativeai.NativeLib.whisperInit(mm.file(model, "model.bin").path, threads) }.getOrDefault(0L)
+        var model = liveModel() ?: return
+        fun load(m: String): Long {
+            val t = System.nanoTime()
+            val h = runCatching { app.carnet.nativeai.NativeLib.whisperInit(mm.file(m, "model.bin").path, threads) }.getOrDefault(0L)
+            liveStats += "load=$m:${(System.nanoTime() - t) / 1_000_000}ms "
+            return h
+        }
+        var h = load(model)
         if (h == 0L) {
             _state.value = _state.value.copy(error = "Live captions couldn't start. Audio is still being recorded.")
             live = false; return
         }
-        var prompt = ""
+        var prompt = ""; var chunks = 0; var audioMs = 0L; var computeMs = 0L
+        var rtf = prefs.getFloat("rtf_$model", -1f)
         try {
-            while (session == mine && (_state.value.recording || synchronized(liveBuf) { liveSamples } > RATE)) {
+            while (session == mine && (_state.value.recording || synchronized(liveBuf) { liveSamples } > RATE * 3 / 10)) {
                 // After Stop, the words still buffered are transcribed once more before finishing.
                 if (!_state.value.recording) quietBlocks = 99
                 val chunk = takeChunk()
@@ -336,19 +371,32 @@ object Recorder {
                     if (speaking != _state.value.partial.isNotEmpty()) _state.value = _state.value.copy(partial = if (speaking) "…" else "")
                     Thread.sleep(150); continue
                 }
-                val (pcm, startMs) = chunk
+                val (pcm, startMs, _) = chunk
                 val t0 = System.nanoTime()
                 val raw = runCatching { app.carnet.nativeai.NativeLib.whisperLive(h, pcm, lang, prompt) }
                     .onFailure { app.carnet.diag.Diag.report(it, "record.live") }.getOrDefault("")
-                val text = cleanLive(raw)
-                app.carnet.diag.Diag.breadcrumb("live chunk ${pcm.size / RATE}s in ${(System.nanoTime() - t0) / 1_000_000}ms")
-                // A slow phone may still be finishing after Stop: never write into the next recording.
+                val took = (System.nanoTime() - t0) / 1_000_000
+                val secs = pcm.size * 1000L / RATE
+                chunks++; audioMs += secs; computeMs += took
+                val r = took.toFloat() / secs.coerceAtLeast(1)
+                rtf = if (rtf < 0f) r else rtf * 0.6f + r * 0.4f
+                prefs.edit().putFloat("rtf_$model", rtf).apply()
                 if (session != mine) break
+                val text = cleanLive(raw)
                 if (text.isNotEmpty()) { prompt = text.takeLast(180); commitText(text, startMs) }
                 if (synchronized(liveBuf) { liveSamples } == 0) _state.value = _state.value.copy(partial = "")
+                // Falling behind with the better model: switch to the fast one (fetched once, in the background).
+                if (model == BETTER && rtf > 0.8f && _state.value.recording) {
+                    if (mm.isInstalled(LIVE_MODEL)) {
+                        app.carnet.nativeai.NativeLib.whisperFree(h); h = 0L
+                        model = LIVE_MODEL; h = load(model); rtf = prefs.getFloat("rtf_$model", -1f)
+                        if (h == 0L) break
+                    } else if (mm.status.value[LIVE_MODEL] !is app.carnet.models.ModelStatus.Downloading) mm.download(LIVE_MODEL)
+                }
             }
         } finally {
-            app.carnet.nativeai.NativeLib.whisperFree(h)
+            if (h != 0L) app.carnet.nativeai.NativeLib.whisperFree(h)
+            liveStats += "model=$model chunks=$chunks audio=${audioMs / 1000}s compute=${computeMs / 1000}s rtf=${"%.2f".format(rtf)} peak=${"%.4f".format(maxRms)} floor=${"%.4f".format(noiseFloor)}"
             if (session == mine) live = false
         }
     }
@@ -420,18 +468,24 @@ object Recorder {
         val st = _state.value
         if (!st.recording) return null
         val duration = st.elapsedMs
-        _state.value = st.copy(recording = false)
+        _state.value = st.copy(recording = false, finishing = worker?.isAlive == true)
         main.post { recognizer?.destroy(); recognizer = null }
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { stopAudio(); worker?.join(15000); session++; live = false }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { stopAudio(); worker?.join(120_000); session++; live = false }
         // Words from the last few seconds the offline engine was still working on.
-        val finalSegs = _state.value.segments.takeIf { it.size >= st.segments.size } ?: st.segments
+        var finalSegs = _state.value.segments.takeIf { it.size >= st.segments.size } ?: st.segments
+        // Lines whose translation hadn't arrived yet (the last words, written while finishing).
+        val missing = finalSegs.withIndex().filter { it.value.english == null && it.value.french.isNotBlank() }
+        if (missing.isNotEmpty()) runCatching {
+            val en = appCtx.app.engine.translate(missing.map { it.value.french }, dir = if (lang == "en") "en-fr" else "fr-en")
+            finalSegs = finalSegs.toMutableList().also { l -> missing.forEachIndexed { k, (i, seg) -> l[i] = seg.copy(english = en[k]) } }
+        }
         wavFile?.let { writeWavHeader(it) }
         val id = st.savedId ?: return null
         val dir = appCtx.app.library.dir(id)
         File(dir, "lang").writeText(lang)
         app.carnet.diag.Diag.event("record.summary", mapOf("path" to trail.toString().trim().take(600), "lang" to lang,
             "segments" to finalSegs.size.toString(), "seconds" to (duration / 1000).toString(), "sdk" to Build.VERSION.SDK_INT.toString(),
-            "service" to (runCatching { android.provider.Settings.Secure.getString(appCtx.contentResolver, "voice_recognition_service") }.getOrNull() ?: "none")))
+            "live" to liveStats, "service" to (runCatching { android.provider.Settings.Secure.getString(appCtx.contentResolver, "voice_recognition_service") }.getOrNull() ?: "none")))
         saveTranscript(File(dir, "transcript.json"), finalSegs)
         val meta = mapOf("duration" to duration.toString(), "segments" to finalSegs.size.toString(), "audio" to (wavFile != null).toString())
         appCtx.app.library.put(LibraryItem(id, ItemType.RECORDING, st.title, System.currentTimeMillis(), wavFile?.name, "transcript.json", meta))

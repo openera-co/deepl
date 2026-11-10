@@ -117,7 +117,7 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                 }
             }
         }
-        if (!st.recording) {
+        if (!st.recording && !st.finishing) {
             // Idle: big record button + previous recordings.
             Column(Modifier.weight(1f).padding(horizontal = 20.dp)) {
                 Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -144,7 +144,11 @@ fun RecordScreen(nav: NavHostController, settings: AppSettings) {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     itemsIndexed(st.segments) { _, s -> SegmentView(s, show) }
                     item {
-                        if (st.partial.isNotEmpty()) Text(st.partial, color = pal.faint, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                        if (st.finishing) Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), color = pal.accent, strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp)); Text("Writing the last words…", color = pal.muted, fontSize = 15.sp)
+                        }
+                        else if (st.partial.isNotEmpty()) Text(st.partial, color = pal.faint, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                         if (st.needsSpeechModel) Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
                             Icon(Ic.Mic, null, tint = pal.muted, modifier = Modifier.size(28.dp))
                             Text(if (Recorder.lang == "en") "This phone can't turn English speech into text" else "This phone can't turn French speech into text",
