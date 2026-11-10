@@ -1,0 +1,35 @@
+name: Publish speech model
+
+# The live-captions speech model: Whisper base fine-tuned on French (qanastek/whisper-base-french-cased,
+# Apache-2.0), converted for whisper.cpp and quantised (q5_1). On 60 French FLEURS clips: 29.9% WER vs
+# 35.4% for the original base model, same speed (tools/speech). Uploaded to the "models-v2" release.
+on:
+  workflow_dispatch:
+  push:
+    paths: [ ".github/workflows/speech.yml" ]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Convert and quantise
+        run: |
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q "transformers<5" huggingface_hub numpy
+          git clone -q --depth 1 --branch v1.9.5 https://github.com/ggml-org/whisper.cpp.git
+          git clone -q --depth 1 https://github.com/openai/whisper.git openai-whisper
+          (cd whisper.cpp && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF > /dev/null && cmake --build build -j4 --target whisper-quantize > /dev/null)
+          python -c "from huggingface_hub import snapshot_download; snapshot_download('qanastek/whisper-base-french-cased', local_dir='hf')"
+          mkdir -p out && python whisper.cpp/models/convert-h5-to-ggml.py hf openai-whisper out
+          ./whisper.cpp/build/bin/whisper-quantize out/ggml-model.bin whisper-base-fr__model.bin q5_1
+          ls -la whisper-base-fr__model.bin; sha256sum whisper-base-fr__model.bin | tee -a $GITHUB_STEP_SUMMARY
+          echo "size $(stat -c %s whisper-base-fr__model.bin)" | tee -a $GITHUB_STEP_SUMMARY
+      - name: Upload
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release upload models-v2 whisper-base-fr__model.bin --clobber -R ${{ github.repository }}
