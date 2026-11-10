@@ -33,7 +33,9 @@ object DocxWriter {
 
         fun runs(inl: List<Inline>): String {
             val sb = StringBuilder()
-            for (i in inl) when (i) {
+            // Converted documents keep floating pictures as pictures in the text.
+            for (i in inl.map { if (it is FloatingImage) it.image else it }) when (i) {
+                is FloatingImage -> {}
                 is TextRun -> {
                     val parts = i.text.split('\n')
                     parts.forEachIndexed { k, part ->
@@ -190,7 +192,8 @@ object OdtWriter {
             val tag = if (p.style.heading > 0) "text:h text:outline-level=\"${p.style.heading}\"" else "text:p"
             val sb = StringBuilder("<$tag text:style-name=\"${paraStyle(p.style)}\">")
             p.style.listLabel?.let { sb.append(esc(it)).append("<text:tab/>") }
-            for (i in p.inlines) when (i) {
+            for (i in p.inlines.map { if (it is FloatingImage) it.image else it }) when (i) {
+                is FloatingImage -> {}
                 is TextRun -> sb.append("<text:span text:style-name=\"${charStyle(i.style)}\">${textOf(i.text)}</text:span>")
                 is ImageRun -> {
                     val name = "Pictures/img${pics.size + 1}." + (if (i.mime.contains("png")) "png" else "jpg")

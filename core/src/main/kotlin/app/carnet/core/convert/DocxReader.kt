@@ -51,14 +51,14 @@ class DocxReader(private val pkg: ZipPackage) {
                 "p" -> {
                     blocks.addAll(paragraph(e))
                     // A paragraph carrying sectPr ends a section.
-                    Xml.child(e, W, "pPr")?.let { Xml.child(it, W, "sectPr") }?.let { sp -> sections.add(section(sp, blocks)); blocks = ArrayList() }
+                    Xml.child(e, W, "pPr")?.let { Xml.child(it, W, "sectPr") }?.let { sp -> sections.add(section(sp, ArrayList(collapseContextual(blocks)))); blocks = ArrayList() }
                 }
                 "tbl" -> blocks.add(table(e))
                 "sdt" -> Xml.child(e, W, "sdtContent")?.let { c -> for (x in Xml.children(c)) if (x.localName == "p") blocks.addAll(paragraph(x)) else if (x.localName == "tbl") blocks.add(table(x)) }
-                "sectPr" -> { sections.add(section(e, blocks)); blocks = ArrayList() }
+                "sectPr" -> { sections.add(section(e, ArrayList(collapseContextual(blocks)))); blocks = ArrayList() }
             }
         }
-        if (blocks.isNotEmpty()) sections.add(Section(blocks = blocks))
+        if (blocks.isNotEmpty()) sections.add(Section(blocks = collapseContextual(blocks)))
         val title = pkg["docProps/core.xml"]?.let { Regex("<dc:title>([^<]*)</dc:title>").find(String(it))?.groupValues?.get(1) }
         return DocModel(sections, title)
     }
@@ -166,7 +166,9 @@ class DocxReader(private val pkg: ZipPackage) {
     }
 
     private fun paraProps(pPr: Element?, styleId: String?): ParaStyle {
-        val pprs = listOfNotNull(defaultP) + chain(styleId ?: defaultParaStyle).mapNotNull { it.pPr } + listOfNotNull(pPr)
+        // Inside a table, the table style's paragraph settings (e.g. "Table Grid": no spacing) come before the paragraph's own style.
+        val pprs = listOfNotNull(defaultP) + (tableStyle?.let { chain(it).mapNotNull { s -> s.pPr } } ?: emptyList()) +
+            chain(styleId ?: defaultParaStyle).mapNotNull { it.pPr } + listOfNotNull(pPr)
         var st = ParaStyle(spaceAfter = 0f, lineSpacing = 1f)
         val name = (styles[styleId ?: defaultParaStyle]?.name ?: "").lowercase()
         val heading = Regex("heading (\\d)").find(name)?.groupValues?.get(1)?.toInt() ?: if (name == "title") 1 else 0
@@ -185,9 +187,16 @@ class DocxReader(private val pkg: ZipPackage) {
             }
             if (Xml.child(p, W, "pageBreakBefore") != null) st = st.copy(pageBreakBefore = true)
             if (Xml.child(p, W, "keepNext") != null) st = st.copy(keepWithNext = true)
+            Xml.child(p, W, "pBdr")?.let { Xml.child(it, W, "bottom") }?.let { b ->
+                val v = b.getAttributeNS(W, "val")
+                st = if (v.isEmpty() || v == "none" || v == "nil") st.copy(borderBottom = null)
+                else st.copy(borderBottom = parseHex(b.getAttributeNS(W, "color")) ?: 0xFF000000.toInt(),
+                    borderWidth = (b.getAttributeNS(W, "sz").toFloatOrNull() ?: 4f) / 8f)
+            }
+            Xml.child(p, W, "contextualSpacing")?.let { c -> st = st.copy(contextual = c.getAttributeNS(W, "val").let { it != "0" && it != "false" }) }
             Xml.child(p, W, "shd")?.getAttributeNS(W, "fill")?.let { v -> parseHex(v)?.let { st = st.copy(shading = it) } }
         }
-        return st.copy(heading = heading, keepWithNext = st.keepWithNext || heading > 0)
+        return st.copy(heading = heading, keepWithNext = st.keepWithNext || heading > 0, styleId = styleId ?: defaultParaStyle)
     }
 
     // ---------------------------------------------------------------- content
@@ -222,7 +231,7 @@ class DocxReader(private val pkg: ZipPackage) {
         val base = baseChar(styleId)
         val inlines = ArrayList<Inline>()
         val extra = ArrayList<BlockNode>()
-        var pageBreakAfter = false
+        var pageBreakAfter = false; var pageBreakFirst = false
         var inField = 0
         var fieldInstr = ""
         fun fieldRun(r: Element) {
@@ -243,10 +252,11 @@ class DocxReader(private val pkg: ZipPackage) {
                     else -> if (inField == 0 || inField == 2) when (c.localName) {
                         "t" -> inlines.add(TextRun(c.textContent, st))
                         "tab" -> inlines.add(TextRun("\t", st))
-                        "br" -> if (c.getAttributeNS(W, "type") == "page") pageBreakAfter = true else inlines.add(TextRun("\n", st))
+                        // A page break before any text starts the paragraph on a new page; later ones end it.
+                        "br" -> if (c.getAttributeNS(W, "type") == "page") { if (inlines.none { it is TextRun && it.text.isNotBlank() }) pageBreakFirst = true else pageBreakAfter = true } else inlines.add(TextRun("\n", st))
                         "noBreakHyphen" -> inlines.add(TextRun("-", st))
                         "sym" -> inlines.add(TextRun("•", st))
-                        "drawing" -> image(c)?.let { inlines.add(it) }
+                        "drawing" -> image(c)?.let { img -> inlines.add(floating(c, img) ?: img) }
                     }
                 }
             }
@@ -264,7 +274,10 @@ class DocxReader(private val pkg: ZipPackage) {
         }
         walk(p)
         val out = ArrayList<BlockNode>()
-        out.add(Paragraph(inlines, ps))
+        if (pageBreakFirst) out.add(PageBreak)
+        // Empty paragraphs are as tall as their paragraph mark's font (covers are often spaced with them).
+        val mark = pPr?.let { Xml.child(it, W, "rPr") }?.let { applyR(base, it) } ?: base
+        out.add(Paragraph(inlines, ps.copy(markSize = mark.size)))
         if (pageBreakAfter) out.add(PageBreak)
         out.addAll(extra)
         return out
@@ -291,10 +304,44 @@ class DocxReader(private val pkg: ZipPackage) {
         return ImageRun(data, w, h, mime)
     }
 
+    /** Anchored (floating) pictures, except "top and bottom" wrapping, which behaves like a picture on its own line. */
+    private fun floating(drawing: Element, img: ImageRun): FloatingImage? {
+        val a = Xml.children(drawing).firstOrNull { it.localName == "anchor" } ?: return null
+        if (Xml.children(a).any { it.localName == "wrapTopAndBottom" }) return null
+        fun pos(tag: String): Triple<String, String?, Float> {
+            val e = Xml.children(a).firstOrNull { it.localName == tag } ?: return Triple("margin", null, 0f)
+            val rel = e.getAttribute("relativeFrom").ifEmpty { "margin" }
+            val align = Xml.children(e).firstOrNull { it.localName == "align" }?.textContent?.trim()
+            val off = Xml.children(e).firstOrNull { it.localName == "posOffset" }?.textContent?.trim()?.toFloatOrNull()?.div(12700f) ?: 0f
+            return Triple(rel, align, off)
+        }
+        val (hr, ha, ho) = pos("positionH"); val (vr, va, vo) = pos("positionV")
+        return FloatingImage(img, hr, ha, ho, vr, va, vo)
+    }
+
+    private var tableStyle: String? = null
+
+    /** Word drops the space between consecutive paragraphs of the same style when either asks for it (lists). */
+    private fun collapseContextual(blocks: List<BlockNode>): List<BlockNode> {
+        val out = blocks.toMutableList()
+        for (i in 1 until out.size) {
+            val a = out[i - 1] as? Paragraph ?: continue; val b = out[i] as? Paragraph ?: continue
+            if (a.style.styleId == null || a.style.styleId != b.style.styleId) continue
+            if (a.style.contextual) out[i - 1] = a.copy(style = a.style.copy(spaceAfter = 0f))
+            if (b.style.contextual) out[i] = b.copy(style = b.style.copy(spaceBefore = 0f))
+        }
+        return out
+    }
+
     private fun table(t: Element): Table {
-        val grid = Xml.child(t, W, "tblGrid")?.let { g -> Xml.children(g).filter { it.localName == "gridCol" }.map { twip(it, "w") ?: 0f } } ?: emptyList()
         val tblPr = Xml.child(t, W, "tblPr")
         val styleId = tblPr?.let { Xml.child(it, W, "tblStyle") }?.getAttributeNS(W, "val")
+        val outerStyle = tableStyle; tableStyle = styleId
+        try { return tableBody(t, tblPr, styleId) } finally { tableStyle = outerStyle }
+    }
+
+    private fun tableBody(t: Element, tblPr: Element?, styleId: String?): Table {
+        val grid = Xml.child(t, W, "tblGrid")?.let { g -> Xml.children(g).filter { it.localName == "gridCol" }.map { twip(it, "w") ?: 0f } } ?: emptyList()
         val bordersEl = tblPr?.let { Xml.child(it, W, "tblBorders") } ?: chain(styleId).mapNotNull { s -> s.pPr }.firstOrNull()?.let { null }
         val styleHasBorders = styleId != null && (styleId.contains("Grid", true) || styleId.contains("Table", true))
         val borders = bordersEl?.let { b -> Xml.children(b).any { it.getAttributeNS(W, "val").let { v -> v.isNotEmpty() && v != "none" && v != "nil" } } } ?: styleHasBorders
@@ -306,7 +353,7 @@ class DocxReader(private val pkg: ZipPackage) {
                 val span = tcPr?.let { Xml.child(it, W, "gridSpan") }?.getAttributeNS(W, "val")?.toIntOrNull() ?: 1
                 val shd = tcPr?.let { Xml.child(it, W, "shd") }?.getAttributeNS(W, "fill")?.let { parseHex(it) }
                 val blocks = Xml.children(tc).flatMap { if (it.localName == "p") paragraph(it) else if (it.localName == "tbl") listOf(table(it)) else emptyList() }
-                Cell(blocks.filter { it !is PageBreak }, span, shd)
+                Cell(collapseContextual(blocks.filter { it !is PageBreak }), span, shd)
             }
             rows.add(Row(cells, header))
         }

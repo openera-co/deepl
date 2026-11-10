@@ -58,7 +58,7 @@ class Paginator(private val m: TextMeasurer) {
         val ctx = Ctx(ps.marginLeft, ps.width - ps.marginRight)
         fun newPage() { page = RenderPage(ps.width, ps.height).also { pages.add(it) }; y = ps.marginTop }
         var prevAfter = 0f
-        for (b in sec.blocks) {
+        for ((bi, b) in sec.blocks.withIndex()) {
             when (b) {
                 is PageBreak -> { newPage(); prevAfter = 0f }
                 is Paragraph -> {
@@ -67,16 +67,30 @@ class Paginator(private val m: TextMeasurer) {
                     val lines = layoutParagraph(b, ctx.right - ctx.left)
                     y += before
                     // Keep a heading with at least its first line + next block start.
-                    if (b.style.keepWithNext && y + lines.sumOf { it.height.toDouble() }.toFloat() + 40 > bottom && y > ps.marginTop + 1) newPage()
+                    // Keep a heading with the start of what follows (Word: keep with next + 2-line widow control).
+                    val next = sec.blocks.getOrNull(bi + 1)
+                    val nextStart = when (next) {
+                        is Paragraph -> b.style.spaceAfter + next.style.spaceBefore + layoutParagraph(next, ctx.right - ctx.left).take(2).sumOf { it.height.toDouble() }.toFloat()
+                        is Table -> b.style.spaceAfter + 30f
+                        else -> 0f
+                    }
+                    // Hand-made headings (one bold line) are kept with what follows too.
+                    val headingLike = b.style.keepWithNext || (lines.size == 1 && next is Paragraph &&
+                        b.inlines.filterIsInstance<TextRun>().filter { it.text.isNotBlank() }.let { r -> r.isNotEmpty() && r.all { it.style.bold } })
+                    if (headingLike && y + lines.sumOf { it.height.toDouble() }.toFloat() + nextStart > bottom && y > ps.marginTop + 1) newPage()
                     if (b.style.shading != null) {
                         val h = lines.sumOf { it.height.toDouble() }.toFloat()
                         page.ops.add(RectOp(ctx.left + b.style.indentLeft, y, ctx.right - ctx.left - b.style.indentLeft - b.style.indentRight, h, b.style.shading, null))
                     }
+                    val floats = b.inlines.filterIsInstance<FloatingImage>()
+                    if (floats.isNotEmpty() && lines.isNotEmpty() && y + lines[0].height > bottom && y > ps.marginTop + 1) newPage()
+                    for (f in floats) placeFloat(page, ps, f, y)
                     for (ln in lines) {
                         if (y + ln.height > bottom && y > ps.marginTop + 1) newPage()
                         emitLine(page, ln, ctx.left, y, 0, 0)
                         y += ln.height
                     }
+                    b.style.borderBottom?.let { c -> page.ops.add(LineOp(ctx.left + b.style.indentLeft, y + 1f, ctx.right - b.style.indentRight, y + 1f, c, b.style.borderWidth)) }
                     y += b.style.spaceAfter
                     prevAfter = b.style.spaceAfter
                 }
@@ -99,6 +113,15 @@ class Paginator(private val m: TextMeasurer) {
                 }
             }
         }
+    }
+
+    private fun placeFloat(page: RenderPage, ps: PageSetup, f: FloatingImage, paraY: Float) {
+        val w = min(f.image.widthPt, ps.width); val h = min(f.image.heightPt, ps.height)
+        val (x0, x1) = if (f.hRel == "page") 0f to ps.width else ps.marginLeft to ps.width - ps.marginRight
+        val x = when (f.hAlign) { "left", "inside" -> x0; "center" -> (x0 + x1 - w) / 2; "right", "outside" -> x1 - w; else -> x0 + f.hOffset }
+        val (y0, y1) = when (f.vRel) { "page" -> 0f to ps.height; "margin", "topMargin" -> ps.marginTop to ps.height - ps.marginBottom; else -> paraY to paraY }
+        val y = when (f.vAlign) { "top" -> y0; "center" -> (y0 + y1 - h) / 2; "bottom" -> y1 - h; else -> y0 + f.vOffset }
+        page.ops.add(ImageOp(x.coerceIn(0f, ps.width - w), y.coerceIn(0f, ps.height - h), w, h, f.image))
     }
 
     // ---------------------------------------------------------------- paragraphs
@@ -126,6 +149,7 @@ class Paginator(private val m: TextMeasurer) {
                         words.add(Piece(s, inl.style, w(s, inl.style))); i = j
                     }
                 }
+                is FloatingImage -> {} // drawn by the flow at its own position
                 is ImageRun -> {
                     val maxW = width - st.indentLeft - st.indentRight
                     val scale = min(1f, maxW / inl.widthPt)
@@ -165,7 +189,7 @@ class Paginator(private val m: TextMeasurer) {
             }
             val spaces = cur.dropLast(1).count { it.text.endsWith(" ") }
             val justify = if (st.align == HAlign.JUSTIFY && !last && spaces > 0) (avail - lw) / spaces else 0f
-            lines.add(Line(cur, max(0f, x), lw, ascent, if (cur.isEmpty() && imgH == 0f) defaultStyle.size * 1.2f * st.lineSpacing else height, justify,
+            lines.add(Line(cur, max(0f, x), lw, ascent, if (cur.isEmpty() && imgH == 0f) (if (p.inlines.none { it is TextRun }) st.markSize ?: defaultStyle.size else defaultStyle.size) * 1.2f * st.lineSpacing else height, justify,
                 if (first) label else null, if (first && label != null) max(0f, st.indentLeft + st.firstLine) else null))
             cur = ArrayList(); curW = 0f; first = false
         }
@@ -229,7 +253,9 @@ class Paginator(private val m: TextMeasurer) {
         return ws.map { it * total / sum }
     }
 
-    private val cellPad = 4f
+    // Word's default cell margins: 0.08" left/right, none top/bottom.
+    private val cellPad = 5.4f
+    private val cellPadV = 0.5f
 
     private fun layoutRow(row: Row, cols: List<Float>): LaidRow {
         var col = 0
@@ -240,13 +266,13 @@ class Paginator(private val m: TextMeasurer) {
             val cw = cols.subList(min(col, cols.size - 1), min(cols.size, col + span)).sum().takeIf { it > 0 } ?: cols.last()
             val inner = cw - 2 * cellPad
             val content = ArrayList<Pair<Any, Float>>()
-            var h = cellPad
+            var h = cellPadV
             for (b in c.blocks) {
                 when (b) {
                     is Paragraph -> {
                         val lines = layoutParagraph(b, inner)
                         for (ln in lines) { content.add(ln to h); h += ln.height }
-                        h += min(b.style.spaceAfter, 4f)
+                        if (b !== c.blocks.last()) h += min(b.style.spaceAfter, 4f)
                     }
                     is Table -> {
                         // Nested tables: flatten to text lines.
@@ -256,7 +282,7 @@ class Paginator(private val m: TextMeasurer) {
                     else -> {}
                 }
             }
-            h += cellPad
+            h += cellPadV
             cells.add(LaidCell(x, cw, content, h, c.shading))
             x += cw; col += span
         }

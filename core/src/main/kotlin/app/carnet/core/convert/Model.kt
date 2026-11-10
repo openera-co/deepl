@@ -20,6 +20,12 @@ data class CharStyle(
 sealed class Inline
 data class TextRun(val text: String, val style: CharStyle) : Inline()
 data class ImageRun(val data: ByteArray, val widthPt: Float, val heightPt: Float, val mime: String = "image/png") : Inline()
+/**
+ * A picture placed on the page rather than in the line (Word "In front of / Square / Behind"): it
+ * takes no room in the text. Position relative to [hRel]/[vRel] ("page", "margin", else the
+ * paragraph), by alignment ("left"/"center"/"right", "top"/"center"/"bottom") or offset in points.
+ */
+data class FloatingImage(val image: ImageRun, val hRel: String, val hAlign: String?, val hOffset: Float, val vRel: String, val vAlign: String?, val vOffset: Float) : Inline()
 data class FieldRun(val kind: String, val style: CharStyle) : Inline() // "PAGE", "NUMPAGES"
 
 enum class HAlign { LEFT, CENTER, RIGHT, JUSTIFY }
@@ -37,6 +43,14 @@ data class ParaStyle(
     val pageBreakBefore: Boolean = false,
     val shading: Int? = null,
     val keepWithNext: Boolean = false,
+    /** Word's paragraph style and "don't add space between paragraphs of the same style". */
+    val styleId: String? = null,
+    val contextual: Boolean = false,
+    /** Font size of the paragraph mark: the height of an empty paragraph. */
+    val markSize: Float? = null,
+    /** Line under the paragraph (Word paragraph border): colour and width in points. */
+    val borderBottom: Int? = null,
+    val borderWidth: Float = 0.5f,
 )
 
 sealed class BlockNode
