@@ -16,3 +16,11 @@ class FormulaLineTest {
         assertTrue(Segmenter.isFormulaLine("Équation bilan : 6 CO₂ + 6 H₂O → C₆H₁₂O₆"))
     }
 }
+
+class FormulaWordsTest {
+    @Test
+    fun neighbouringWordsStayTogether() {
+        val segs = Segmenter.split("Équation bilan : 6 CO₂ + 6 H₂O → C₆H₁₂O₆")
+        kotlin.test.assertTrue(segs.any { it.translatable && it.text == "Équation bilan" }, segs.toString())
+    }
+}

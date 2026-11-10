@@ -258,7 +258,7 @@ object Layout {
      * Wraps styled [regions] into the block's width. Uses the original height first, then the free
      * room below the block, and only then shrinks the font (down to [minScale]).
      */
-    fun fit(block: Block, regions: List<Region>, m: TextMeasurer, minScale: Float = 0.6f): Placement {
+    fun fit(block: Block, regions: List<Region>, m: TextMeasurer, minScale: Float = 0.6f, maxSize: Float? = null): Placement {
         val words = toWords(block, regions)
         val single = block.lines.size == 1
         val (left, right) = when {
@@ -275,7 +275,7 @@ object Layout {
         val widthAt = { i: Int -> max(maxW - if (i == 0) ind0 else ind1, 4f) }
         val ratio = block.lineHeight / block.fontSize.coerceAtLeast(1f)
         val room = block.maxBottom - block.top
-        var size = block.fontSize
+        var size = maxSize?.let { min(it, block.fontSize) } ?: block.fontSize
         var lines = wrap(words, widthAt, size, m)
         // Shrink to fit the room; below minScale only if the text would otherwise leave the page.
         while (size > block.fontSize * 0.4f) {
@@ -312,7 +312,7 @@ object Layout {
     }
 
     /** Plain (single-style) fit, used by photo overlays. */
-    fun fit(block: Block, text: String, m: TextMeasurer, minScale: Float = 0.6f): Placement = fit(block, listOf(Region(styleIndex(block), text)), m, minScale)
+    fun fit(block: Block, text: String, m: TextMeasurer, minScale: Float = 0.6f, maxSize: Float? = null): Placement = fit(block, listOf(Region(styleIndex(block), text)), m, minScale, maxSize)
 
     private fun styleIndex(b: Block) = b.styles.indexOf(b.style).coerceAtLeast(0)
 

@@ -57,6 +57,10 @@ object Segmenter {
     private val unitSlash = Regex("(?<=[\\p{L}\\d)])/(?=[\\p{L}\\d(])")
 
     /** A formula with a few words around it ("Moyenne = 25 / 5 = 5 jours", "x̄ = Σ xᵢ pour i = 1 … N"). */
+    /** Words separated only by a space, an apostrophe or a small linking word belong to one phrase. */
+    private val linkWord = Regex(" (?:de|du|des|la|le|les|en|et|à|au|d'|l'|d’|l’) ?")
+    private fun joinable(gap: String) = gap == " " || gap == "'" || gap == "’" || linkWord.matches(gap)
+
     fun isFormulaLine(t: String): Boolean {
         // A slash inside a unit ("mL/h", "km/h", "m/s²") or a date isn't maths.
         val u = t.replace(unitSlash, "")
@@ -70,11 +74,17 @@ object Segmenter {
     private fun splitPart(line: String, out: MutableList<Segment>) {
         if (isFormulaLine(line)) {
             // Only the words are translated; every symbol stays exactly where it is.
+            // Neighbouring words ("Équation bilan") are translated together, so terms keep their meaning.
             var p = 0
-            for (m in word.findAll(line)) {
-                if (m.value.length < 3) continue
-                if (m.range.first > p) out.add(Segment(line.substring(p, m.range.first), false))
-                out.add(Segment(m.value, true)); p = m.range.last + 1
+            val ms = word.findAll(line).filter { it.value.length >= 3 }.toList()
+            var i = 0
+            while (i < ms.size) {
+                var j = i
+                while (j + 1 < ms.size && joinable(line.substring(ms[j].range.last + 1, ms[j + 1].range.first))) j++
+                val a = ms[i].range.first; val b = ms[j].range.last + 1
+                if (a > p) out.add(Segment(line.substring(p, a), false))
+                out.add(Segment(line.substring(a, b), true)); p = b
+                i = j + 1
             }
             if (p < line.length) out.add(Segment(line.substring(p), false))
             return

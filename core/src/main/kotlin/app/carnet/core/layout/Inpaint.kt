@@ -22,10 +22,24 @@ object Inpaint {
         var maxD = 0
         for (y in ay until by) for (x in ax until bx) maxD = max(maxD, dist(px[y * w + x], bg))
         val t = max(32, (maxD * 0.2f).roundToInt())
+        // Ruled lines (notebooks, tables) run across the whole region: on those rows the "paper" is the
+        // line's own colour, so only the ink crossing it is erased and the line comes back unbroken.
+        val rowBg = IntArray(rh) { bg }
+        for (y in 0 until rh) {
+            val row = (ay + y) * w + ax
+            val step = max(1, rw / 64)
+            val samples = ArrayList<Int>()
+            var x = 0; while (x < rw) { samples.add(px[row + x]); x += step }
+            val med = medianOf(samples)
+            if (dist(med, bg) > 25 && samples.count { dist(it, med) < 40 } > samples.size * 0.6) rowBg[y] = med
+        }
         val mask = BooleanArray(rw * rh)
-        for (y in 0 until rh) for (x in 0 until rw) {
-            val p = px[(ay + y) * w + ax + x]
-            mask[y * rw + x] = dist(p, bg) > t && abs(lum(p) - bgL) > 18
+        for (y in 0 until rh) {
+            val rb = rowBg[y]; val rbL = lum(rb)
+            for (x in 0 until rw) {
+                val p = px[(ay + y) * w + ax + x]
+                mask[y * rw + x] = dist(p, rb) > t && abs(lum(p) - rbL) > 18
+            }
         }
         // Grow the mask to swallow anti-aliased glyph edges.
         val grown = if (dilate <= 0) mask else dilateSquare(mask, rw, rh, dilate)
@@ -37,10 +51,11 @@ object Inpaint {
                 var e = x
                 while (e < rw && grown[y * rw + e]) e++
                 // Colours just outside the masked run on this row (fall back to the paper colour).
-                val left = if (x > 0) px[row + x - 1] else if (ax > 0) px[row - 1] else bg
-                val right = if (e < rw) px[row + e] else if (bx < w) px[row + rw] else bg
-                val l = if (dist(left, bg) > t) bg else left
-                val r = if (dist(right, bg) > t) bg else right
+                val rb = rowBg[y]
+                val left = if (x > 0) px[row + x - 1] else if (ax > 0) px[row - 1] else rb
+                val right = if (e < rw) px[row + e] else if (bx < w) px[row + rw] else rb
+                val l = if (dist(left, rb) > t) rb else left
+                val r = if (dist(right, rb) > t) rb else right
                 val n = e - x + 1
                 for (k in x until e) px[row + k] = mix(l, r, (k - x + 1).toFloat() / n)
                 x = e
@@ -108,6 +123,12 @@ object Inpaint {
         for (p in core) { rs += (p shr 16) and 255; gs += (p shr 8) and 255; bs += p and 255 }
         val n = core.size
         return (0xFF shl 24) or ((rs / n).toInt() shl 16) or ((gs / n).toInt() shl 8) or (bs / n).toInt()
+    }
+
+    private fun medianOf(c: List<Int>): Int {
+        if (c.isEmpty()) return 0xFFFFFFFF.toInt()
+        val r = c.map { (it shr 16) and 255 }.sorted(); val g = c.map { (it shr 8) and 255 }.sorted(); val b = c.map { it and 255 }.sorted()
+        return (0xFF shl 24) or (r[r.size / 2] shl 16) or (g[g.size / 2] shl 8) or b[b.size / 2]
     }
 
     fun lum(c: Int) = (299 * ((c shr 16) and 255) + 587 * ((c shr 8) and 255) + 114 * (c and 255)) / 1000

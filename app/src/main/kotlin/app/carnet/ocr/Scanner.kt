@@ -166,9 +166,10 @@ class Scanner(private val context: Context, private val engine: Engine) {
             val ink = Inpaint.ink(orig, w, h, b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt(), bg)
             colours[b] = bg to ink
             for (l in b.lines) {
-                val pad = (l.height * 0.15f).toInt() + 1
-                val lbg = Inpaint.background(orig, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad)
-                Inpaint.eraseInk(px, w, h, l.left.toInt() - pad, l.top.toInt() - pad, l.right.toInt() + pad, l.bottom.toInt() + pad, lbg, dilate = max(2, (l.height / 12).toInt()))
+                // Wider at the ends: the recogniser's box often clips the first and last letter.
+                val pad = (l.height * 0.15f).toInt() + 1; val padX = (l.height * 0.35f).toInt() + 2
+                val lbg = Inpaint.background(orig, w, h, l.left.toInt() - padX, l.top.toInt() - pad, l.right.toInt() + padX, l.bottom.toInt() + pad)
+                Inpaint.eraseInk(px, w, h, l.left.toInt() - padX, l.top.toInt() - pad, l.right.toInt() + padX, l.bottom.toInt() + pad, lbg, dilate = max(2, (l.height / 12).toInt()))
             }
         }
         val tErase = System.nanoTime()
@@ -176,13 +177,21 @@ class Scanner(private val context: Context, private val engine: Engine) {
         // 2) Draw the English in the same place and colour.
         val c = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
+        val measurer = TextMeasurer { text, size, _ -> paint.textSize = size; paint.measureText(text) }
+        // One text size for the page's body text (each block alone would pick its own); headings keep theirs.
+        val drawn = blocks.filter { translations[it] != null && colours[it] != null }
+        val bodySizes = drawn.map { it.fontSize }.sorted()
+        val bodyOrig = bodySizes.getOrNull(bodySizes.size / 2) ?: 0f
+        val isBody = { b: Block -> b.fontSize <= bodyOrig * 1.3f }
+        val first = drawn.associateWith { b -> paint.typeface = if (isBold(src, b, colours[b]!!.first)) sansBold else sans; Layout.fit(b, translations[b]!!, measurer) }
+        val fitted = first.filterKeys(isBody).values.map { it.fontSize }.sorted()
+        val bodySize = fitted.getOrNull(fitted.size / 2)
         for (b in blocks) {
             val tr = translations[b] ?: continue
             val (bg, fg) = colours[b] ?: continue
             paint.typeface = if (isBold(src, b, bg)) sansBold else sans
             paint.color = fg
-            val measurer = TextMeasurer { text, size, _ -> paint.textSize = size; paint.measureText(text) }
-            val placement = Layout.fit(b, tr, measurer)
+            val placement = if (bodySize != null && isBody(b) && first[b]!!.fontSize > bodySize * 1.05f) Layout.fit(b, tr, measurer, maxSize = bodySize) else first[b]!!
             paint.textSize = placement.fontSize
             c.save()
             if (abs(angle) in 0.5f..15f) c.rotate(angle, b.left, b.top)
