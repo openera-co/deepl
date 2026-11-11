@@ -81,7 +81,8 @@ def render(text, r, font_files):
 N_SYN = 36000
 OFF = 30000  # different lines from round 1
 syn_img = [render(texts[OFF + i], random.Random(5 * 10**6 + i), train_fonts) for i in range(N_SYN)]; syn_txt = texts[OFF:OFF + N_SYN]
-test_txt = texts[24000:24600]  # round 1's test lines (training here uses 30000+); test_img = [render(t, random.Random(10**6 + i), test_fonts) for i, t in enumerate(test_txt)]
+# Round 1's test lines (training here uses 30000+).
+test_txt = texts[24000:24600]; test_img = [render(t, random.Random(10**6 + i), test_fonts) for i, t in enumerate(test_txt)]
 print("rendered", len(syn_img), flush=True)
 
 proc = TrOCRProcessor.from_pretrained(BASE)
