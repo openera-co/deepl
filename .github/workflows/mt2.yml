@@ -1,0 +1,46 @@
+name: Publish translation models
+
+# Both translation models fine-tuned on school-domain text (tools/kaggle/distil_train: 24k Vikidia pairs
+# translated by Mistral-Small-24B, with OCR-damaged French). BLEU vs teacher on held-out school text:
+# FR→EN 61.0 → 68.2 (with OCR errors 58.7 → 65.7), EN→FR 63.8 → 68.7; on human references COMET is
+# unchanged (FLORES FR→EN 0.892/0.890, news 0.873/0.873, FLORES EN→FR 0.879/0.879). Same vocabulary, so
+# phones download only model.bin. Files come from the temporary branch artifacts-mt-school.
+on:
+  workflow_dispatch:
+  push:
+    paths: [ ".github/workflows/mt2.yml" ]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: artifacts-mt-school, path: art }
+      - name: Reassemble and check
+        run: |
+          mkdir -p up
+          for d in fr-en en-fr; do cat art/$d.model.part* > up/${d}__model.bin; cp art/$d.config.json up/${d}__config.json; done
+          (cd up && sha256sum -c ../art/sha.txt)
+      - name: Catalog
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release download models-v2 -p models.json -R ${{ github.repository }}
+          python3 - <<'PY'
+          import json, hashlib, os
+          cat = json.load(open("models.json"))
+          for m in cat["models"]:
+              for f in m["files"]:
+                  p = f"up/{m['id']}__{f['name']}"
+                  if os.path.exists(p):
+                      f["size"] = os.path.getsize(p); f["sha256"] = hashlib.sha256(open(p, "rb").read()).hexdigest()
+          json.dump(cat, open("up/models.json", "w"), indent=1, ensure_ascii=False)
+          print(json.dumps([(m["id"], [(f["name"], f["sha256"][:12]) for f in m["files"]]) for m in cat["models"]], indent=1))
+          PY
+      - name: Upload
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release upload models-v2 up/* --clobber -R ${{ github.repository }}
+          gh api -X DELETE repos/${{ github.repository }}/git/refs/heads/artifacts-mt-school || true

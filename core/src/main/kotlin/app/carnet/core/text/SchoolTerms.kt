@@ -39,6 +39,8 @@ object SchoolTerms {
         Term("Sciences de la Vie et de la Terre", "Biology"), Term("sciences de la vie et de la Terre", "biology"),
         Term("éducation physique et sportive", "PE"), Term("Éducation physique et sportive", "PE"), Term("Histoire-Géographie", "History and Geography"),
         Term("Physique-Chimie", "Physics and Chemistry"), Term("enseignement moral et civique", "moral and civic education"),
+        Term("pente de la droite", "slope of the line"), Term("équation de la droite", "equation of the line"),
+        Term("équation d'une droite", "equation of a line"), Term("la droite (AB)", "the line (AB)"),
         Term("berline", "sedan"), Term("berlines", "sedans"), Term("contrôle de gestion", "management control"),
     )
 
