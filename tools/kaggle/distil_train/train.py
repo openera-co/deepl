@@ -74,10 +74,20 @@ def run(sl, tl):
             h = ct_tr(s_); res[n] = round(sacrebleu.corpus_bleu(h, [r]).score, 2)
             open(f"{OUT}/{sl}-{tl}.shipped.{n}.txt", "w").write("\n".join(h) + "\n")
         log[f"{sl}-{tl} shipped (round 1)"] = res; save(); print(sl, tl, "shipped", res, flush=True)
-        del ct
+        del ct; import gc as _gc; _gc.collect(); torch.cuda.empty_cache()
     except Exception as e: log[f"{sl}-{tl} shipped error"] = str(e)[:300]; save()
     # Training data: teacher pairs; French sources also get an OCR-damaged copy (20%).
     srcs = [p["src"] for p in train]; tgts = [p["tgt"] for p in train]
+    # Human-translated general text (News Commentary) mixed in, so the model keeps its general French
+    # (round 2 without it: school +1.2 BLEU but FLORES -1.2 and news -0.6 vs round 1).
+    try:
+        import pandas as pd
+        nc = pd.read_parquet("https://huggingface.co/datasets/Helsinki-NLP/news_commentary/resolve/main/en-fr/train-00000-of-00001.parquet")
+        gen = [(t[sl], t[tl]) for t in nc["translation"] if t[sl] and t[tl] and 4 <= len(t[sl].split()) <= 60]
+        random.Random(11).shuffle(gen); gen = gen[:len(train)]
+        srcs += [a for a, _ in gen]; tgts += [b for _, b in gen]
+        log[f"{sl}-{tl} general pairs"] = len(gen); save()
+    except Exception as e: log[f"{sl}-{tl} general error"] = str(e)[:300]; save()
     if sl == "fr":
         extra = [i for i in range(len(train)) if R.random() < 0.2]
         srcs += [damage(train[i]["src"], random.Random(10**6 + i)) for i in extra]; tgts += [train[i]["tgt"] for i in extra]
@@ -95,8 +105,8 @@ def run(sl, tl):
     log[f"{sl}-{tl} probe loss before"] = round(sum(probe) / len(probe), 3); save()
     assert log[f"{sl}-{tl} probe loss before"] < 4, "labels don't match the model"
     model.train()
-    args = Seq2SeqTrainingArguments(output_dir="/tmp/ck", per_device_train_batch_size=24, gradient_accumulation_steps=2, learning_rate=2e-5,
-        num_train_epochs=2, warmup_ratio=0.03, weight_decay=0.01, fp16=True, logging_steps=200, save_strategy="no", report_to=[],
+    args = Seq2SeqTrainingArguments(output_dir="/tmp/ck", per_device_train_batch_size=16, gradient_accumulation_steps=3, learning_rate=1.5e-5,
+        num_train_epochs=1, warmup_ratio=0.03, weight_decay=0.01, fp16=True, logging_steps=200, save_strategy="no", report_to=[],
         lr_scheduler_type="linear", label_smoothing_factor=0.1, dataloader_num_workers=2, group_by_length=True)
     t0 = time.time()
     Seq2SeqTrainer(model=model, args=args, train_dataset=DS(), data_collator=DataCollatorForSeq2Seq(tok, model=model)).train()
