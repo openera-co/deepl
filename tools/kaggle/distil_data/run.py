@@ -54,7 +54,7 @@ def main():
                  f"It may be a sentence, a heading or a short label: translate it as such, naturally and fluently, "
                  f"keeping names, numbers and formatting. Output only the translation.\n\n{t}"}]
     llm = None
-    for eager in (False, True):
+    for eager in (True, False):  # eager first: torch.compile hit its recompile limit after 4 h
         try:
             llm = LLM(model="stelterlab/Mistral-Small-24B-Instruct-2501-AWQ", dtype="float16", quantization="awq", tensor_parallel_size=2,
                       max_model_len=1280, gpu_memory_utilization=0.84, enforce_eager=eager, max_num_seqs=64)
@@ -63,7 +63,7 @@ def main():
     sp = SamplingParams(temperature=0, max_tokens=400)
     # Alternate directions in chunks so both get data whatever the time budget allows.
     # Resume after segments earlier runs already translated (same shuffled order).
-    start = int(os.environ.get("START", "4000"))
+    start = int(os.environ.get("START", "14000"))
     pos = {"fr": start, "en": start}; files = {l: open(f"{OUT}/pairs.{l}.jsonl", "a", encoding="utf-8") for l in pos}
     CH = 2000
     while time.time() - T0 < BUDGET:

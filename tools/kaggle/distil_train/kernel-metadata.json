@@ -7,7 +7,9 @@
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
-  "dataset_sources": [],
+  "dataset_sources": [
+    "kuyamblaisetimchia/carnet-school-pairs"
+  ],
   "competition_sources": [],
-  "kernel_sources": ["kuyamblaisetimchia/carnet-distil-data"]
+  "kernel_sources": []
 }
