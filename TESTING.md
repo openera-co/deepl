@@ -217,3 +217,19 @@ Every model is compared with the one it replaces on fixed test sets; it ships on
 Teacher: Mistral-Small-24B (AWQ) on Kaggle; translation data: tools/kaggle/distil_data, training:
 tools/kaggle/distil_train; handwriting: tools/kaggle/htr_finetune (the transformers version used
 shifts VisionEncoderDecoder labels twice, so the loss is computed in the script); speech: tools/speech.
+
+## Training round 2 (not shipped)
+
+Same method with ~38k teacher pairs per direction, compared with the shipped round-1 models (BLEU):
+
+| | school | school OCR | FLORES | news |
+|---|---|---|---|---|
+| FR→EN round 1 (shipped) | 68.0 | 65.7 | 43.4 | 41.3 |
+| round 2 (2 epochs) | 69.2 | 67.1 | 42.2 | 40.7 |
+| round 2b (+1:1 News Commentary, 1 epoch) | 67.6 | 65.7 | 43.8 | 40.0 |
+| EN→FR round 1 (shipped) | 68.5 | | 51.5 | |
+| round 2b | 68.9 | | 51.5 | |
+
+More teacher data no longer helps this model size: either it drifts on general text or the gain is
+within noise. Beam search doesn't help either (shipped FR→EN on FLORES: greedy 43.6, beam 2 43.0,
+beam 4 43.1, and slower), so the app keeps greedy decoding.
