@@ -197,3 +197,23 @@ This caught and fixed a crash when the translation engine fails to load.
 - The native engines (whisper.cpp, llama.cpp/TranslateGemma): code is written and wired, but building them
   requires compiling third-party C++, which this environment does not allow. CI builds them with
   `-Pcarnet.native=true`.
+
+## Training round 1 (November 2026)
+
+Every model is compared with the one it replaces on fixed test sets; it ships only if it is better.
+
+| model | test | before | after |
+|---|---|---|---|
+| Translation FR→EN | school text (Vikidia, teacher refs), BLEU | 61.0 | **68.2** |
+| | same, OCR-damaged French, BLEU | 58.7 | **65.7** |
+| | FLORES / news, COMET (human refs) | 0.892 / 0.873 | 0.890 / 0.873 |
+| Translation EN→FR | school text, BLEU | 63.8 | **68.7** |
+| | FLORES, COMET | 0.879 | 0.879 |
+| Handwriting reader | RIMES, 200 lines, 4-bit with the app's code, CER / WER | 5.11% / 18.6% | **4.74% / 16.2%** |
+| | school lines in unseen fonts (fp32), CER / WER | 4.52% / 18.6% | **0.76% / 4.0%** |
+| Live speech (Whisper base) | French FLEURS, 60 clips, WER | 35.4% | **29.9%** |
+| OCR word fixes | 150 photos, WER (all / handwriting) | 6.41% / 16.4% | **6.26% / 16.0%** |
+
+Teacher: Mistral-Small-24B (AWQ) on Kaggle; translation data: tools/kaggle/distil_data, training:
+tools/kaggle/distil_train; handwriting: tools/kaggle/htr_finetune (the transformers version used
+shifts VisionEncoderDecoder labels twice, so the loss is computed in the script); speech: tools/speech.
