@@ -52,6 +52,30 @@ def run(sl, tl):
             open(f"{OUT}/{sl}-{tl}.{tag}.{n}.txt", "w").write("\n".join(h) + "\n")
         log[f"{sl}-{tl} {tag}"] = res; print(sl, tl, tag, res, flush=True); save()
     score("before")
+    # The models the app ships now (previous round), same test sets: the new one must beat these.
+    try:
+        import ctranslate2
+        rel = "https://github.com/openera-co/deepl/releases/download/models-v2/"
+        cd = f"/tmp/shipped-{sl}-{tl}"; os.makedirs(cd, exist_ok=True)
+        for f in ["model.bin", "config.json", "shared_vocabulary.json"]: urllib.request.urlretrieve(f"{rel}{sl}-{tl}__{f}", f"{cd}/{f}")
+        ct = ctranslate2.Translator(cd, device="cuda", compute_type="int8_float16")
+        def ct_tr(srcs):
+            out = []
+            for i in range(0, len(srcs), 64):
+                toks = [tok.convert_ids_to_tokens(tok.encode(x, truncation=True, max_length=256)) for x in srcs[i:i + 64]]
+                out += [tok.convert_tokens_to_string(r.hypotheses[0]).strip() for r in ct.translate_batch(toks, beam_size=1)]
+            return out
+        res = {}
+        sets = [("school", [p["src"] for p in test], [p["tgt"] for p in test])]
+        if sl == "fr": sets.append(("school-ocr", [damage(p["src"], random.Random(i)) for i, p in enumerate(test)], [p["tgt"] for p in test]))
+        sets.append(("flores", ext[f"flores300.{sl}"], ext[f"flores300.{tl}"]))
+        if sl == "fr": sets.append(("news", ext["news500.fr"], ext["news500.en"]))
+        for n, s_, r in sets:
+            h = ct_tr(s_); res[n] = round(sacrebleu.corpus_bleu(h, [r]).score, 2)
+            open(f"{OUT}/{sl}-{tl}.shipped.{n}.txt", "w").write("\n".join(h) + "\n")
+        log[f"{sl}-{tl} shipped (round 1)"] = res; save(); print(sl, tl, "shipped", res, flush=True)
+        del ct
+    except Exception as e: log[f"{sl}-{tl} shipped error"] = str(e)[:300]; save()
     # Training data: teacher pairs; French sources also get an OCR-damaged copy (20%).
     srcs = [p["src"] for p in train]; tgts = [p["tgt"] for p in train]
     if sl == "fr":
@@ -72,7 +96,7 @@ def run(sl, tl):
     assert log[f"{sl}-{tl} probe loss before"] < 4, "labels don't match the model"
     model.train()
     args = Seq2SeqTrainingArguments(output_dir="/tmp/ck", per_device_train_batch_size=24, gradient_accumulation_steps=2, learning_rate=2e-5,
-        num_train_epochs=1, warmup_ratio=0.03, weight_decay=0.01, fp16=True, logging_steps=200, save_strategy="no", report_to=[],
+        num_train_epochs=2, warmup_ratio=0.03, weight_decay=0.01, fp16=True, logging_steps=200, save_strategy="no", report_to=[],
         lr_scheduler_type="linear", label_smoothing_factor=0.1, dataloader_num_workers=2, group_by_length=True)
     t0 = time.time()
     Seq2SeqTrainer(model=model, args=args, train_dataset=DS(), data_collator=DataCollatorForSeq2Seq(tok, model=model)).train()
