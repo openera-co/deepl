@@ -63,7 +63,7 @@ def main():
     sp = SamplingParams(temperature=0, max_tokens=400)
     # Alternate directions in chunks so both get data whatever the time budget allows.
     # Resume after segments earlier runs already translated (same shuffled order).
-    start = int(os.environ.get("START", "14000"))
+    start = int(os.environ.get("START", "40000"))
     pos = {"fr": start, "en": start}; files = {l: open(f"{OUT}/pairs.{l}.jsonl", "a", encoding="utf-8") for l in pos}
     CH = 2000
     while time.time() - T0 < BUDGET:
