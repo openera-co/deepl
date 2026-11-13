@@ -10,6 +10,7 @@ class OcrWords(private val known: Set<String>) {
         "0" to "o", "5" to "s", "f" to "t", "c" to "e", "e" to "c", "n" to "u", "u" to "n", "h" to "b", "b" to "h", "é" to "è", "è" to "é", "a" to "à")
     private val word = Regex("[\\p{L}\\d]{3,}")
 
+    fun isWord(w: String) = isKnown(w)
     private fun isKnown(w: String) = w in known || w.lowercase() in known || w.lowercase().replaceFirstChar { it.uppercase() } in known
 
     fun fix(text: String): String = word.replace(text) { m ->

@@ -1,5 +1,7 @@
 package app.carnet.ocr
 
+import java.util.IdentityHashMap
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -99,6 +101,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val text = recognize(bmp)
         val lines = ArrayList<TextLine>()
         val angles = ArrayList<Float>()
+        pendingConf.clear()
         val blocks = text.textBlocks.sortedWith(compareBy({ it.boundingBox?.top ?: 0 }, { it.boundingBox?.left ?: 0 }))
         // French pages get the recognizer's systematic French mistakes corrected (accents on capitals,
         // "I'" for "l'", "ler" for "1er", "oe" for "œ"…; see OcrFix and the OCR benchmark).
@@ -107,12 +110,18 @@ class Scanner(private val context: Context, private val engine: Engine) {
             val r = l.boundingBox ?: continue
             val h = r.height().toFloat()
             val t = fixWords(app.carnet.core.text.OcrFix.fix(l.text, french), french)
+            pendingConf.add(runCatching { l.confidence }.getOrDefault(0f))
             lines.add(TextLine(0, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), t, h * 1.08f, // Android's sans has a smaller x-height than most print: a bit larger to look the same
                 runs = listOf(app.carnet.core.layout.StyledRun(t, Style()))))
             angles.add(l.angle)
         }
+        lastConfidence = IdentityHashMap<TextLine, Float>().also { m -> lines.forEachIndexed { i, l -> m[l] = pendingConf.getOrElse(i) { 0f } } }
         return lines to angles
     }
+
+    private val pendingConf = ArrayList<Float>()
+    /** The recogniser's confidence per line of the last page read (0–1). */
+    @Volatile private var lastConfidence: IdentityHashMap<TextLine, Float> = IdentityHashMap()
 
     /** The handwriting recognizer (downloaded model "htr-fr"), loaded on first use. */
     private var htr: app.carnet.core.htr.HtrModel? = null
@@ -123,8 +132,24 @@ class Scanner(private val context: Context, private val engine: Engine) {
      * Handwriting: the page's text lines are found by the regular recognizer, then each line is
      * re-read by the handwriting model from its crop of the photo.
      */
-    private suspend fun readHandwriting(bmp: Bitmap, lines: List<TextLine>): List<TextLine> = htrLock.withLock {
+    /**
+     * The handwriting model re-reads only lines the regular recogniser is unsure about (low confidence,
+     * or a word French doesn't have): it takes seconds per line on a phone (a full page took 175 s).
+     */
+    private fun needsHandwritingModel(l: TextLine): Boolean {
+        val conf = lastConfidence[l] ?: 0f
+        if (conf < 0.85f) return true
+        val known = frenchWords() ?: return false
+        return Regex("[\\p{L}]{4,}").findAll(l.text).any { w -> !known.isWord(w.value) }
+    }
+
+    private suspend fun readHandwriting(bmp: Bitmap, all: List<TextLine>, timing: app.carnet.diag.Diag.Timing? = null): List<TextLine> = htrLock.withLock {
+        val pick = all.indices.filter { needsHandwritingModel(all[it]) }
+        timing?.measure("htr_lines", pick.size)?.measure("lines_total", all.size)
+        if (pick.isEmpty()) return@withLock all
+        val t0 = System.nanoTime()
         val m = htr ?: app.carnet.core.htr.HtrModel(app.carnet.core.mt.DirectorySource(app.carnet.CarnetApp.instance.models.dir(HTR_ID))).also { htr = it }
+        val lines = pick.map { all[it] }
         val crops = lines.map { l ->
             val padY = (l.height * 0.2f).toInt() + 2; val padX = (l.height * 0.3f).toInt() + 2
             val x0 = (l.left.toInt() - padX).coerceIn(0, bmp.width - 1); val y0 = (l.top.toInt() - padY).coerceIn(0, bmp.height - 1)
@@ -134,11 +159,15 @@ class Scanner(private val context: Context, private val engine: Engine) {
             Triple(px, w, h)
         }
         val texts = m.recognize(crops)
+        timing?.measure("htr_ms", (System.nanoTime() - t0) / 1_000_000)
         val french = app.carnet.core.text.LanguageGuess.guess(texts.joinToString(" ")) != "en"
-        lines.mapIndexed { i, l ->
-            val t = fixWords(app.carnet.core.text.OcrFix.fix(texts[i].ifBlank { l.text }, french), french)
-            l.copy(text = t, runs = listOf(app.carnet.core.layout.StyledRun(t, Style())))
+        val out = all.toMutableList()
+        pick.forEachIndexed { k, i ->
+            val l = all[i]
+            val t = fixWords(app.carnet.core.text.OcrFix.fix(texts[k].ifBlank { l.text }, french), french)
+            out[i] = l.copy(text = t, runs = listOf(app.carnet.core.layout.StyledRun(t, Style())))
         }
+        out
     }
 
     /** Full pipeline for one page. [onStage] reports "reading" / "translating" / "drawing". */
@@ -146,7 +175,7 @@ class Scanner(private val context: Context, private val engine: Engine) {
         val timing = app.carnet.diag.Diag.timing("scan.page").tag("handwriting", handwriting.toString())
         onStage("reading")
         val (found, angles) = timing.span("ocr") { kotlinx.coroutines.runBlocking { lines(bmp) } }
-        val lines = if (handwriting && handwritingReady && found.isNotEmpty()) readHandwriting(bmp, found) else found
+        val lines = if (handwriting && handwritingReady && found.isNotEmpty()) readHandwriting(bmp, found, timing) else found
         val blocks = Layout.blocks(lines, sizeTolerance = 0.3f)
         Layout.assignRoom(blocks, { bmp.height.toFloat() - 8f }, { bmp.width.toFloat() })
         val french = blocks.joinToString("\n\n") { it.text }

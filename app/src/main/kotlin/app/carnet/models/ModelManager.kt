@@ -204,7 +204,16 @@ class ModelManager(private val context: Context) {
                         done += part.length()
                         awaitAllowedNetwork(id, done, total)
                         val job = kotlin.coroutines.coroutineContext[Job]
-                        fetch(f.url, part, null, { job?.isActive != false }) { n -> done += n; set(id, ModelStatus.Downloading(done, total, speed = meter.add(n))) }
+                        // Connections drop (phone sleeping, weak Wi-Fi): retry, continuing from what's already downloaded.
+                        var attempt = 0
+                        while (true) {
+                            try { fetch(f.url, part, null, { job?.isActive != false }) { n -> done += n; set(id, ModelStatus.Downloading(done, total, speed = meter.add(n))) }; break }
+                            catch (e: java.io.IOException) {
+                                if (++attempt >= 5) throw e
+                                kotlinx.coroutines.delay(2000L shl attempt)
+                                awaitAllowedNetwork(id, done, total)
+                            }
+                        }
                         if (sha256(part) != f.sha256) { part.delete(); throw IllegalStateException("damaged in transfer") }
                     }
                     set(id, ModelStatus.Verifying)
@@ -218,7 +227,8 @@ class ModelManager(private val context: Context) {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 set(id, ModelStatus.Installed)
             } catch (e: Throwable) {
-                app.carnet.diag.Diag.report(e, "model.update", mapOf("model" to id))
+                // A lost connection isn't a bug: the update is simply tried again next time.
+                if (e !is java.io.IOException) app.carnet.diag.Diag.report(e, "model.update", mapOf("model" to id))
                 set(id, ModelStatus.Installed)
             }
         }
